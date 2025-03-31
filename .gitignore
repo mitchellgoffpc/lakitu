@@ -1,0 +1,15 @@
+# python
+__pycache__
+.venv
+
+# system
+.DS_Store
+.vscode
+
+# mupen64
+mupen64plus-core
+mupen64plus-audio-sdl
+mupen64plus-input-sdl
+mupen64plus-rsp-hle
+mupen64plus-video-rice
+GLideN64
