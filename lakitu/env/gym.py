@@ -35,7 +35,6 @@ class RemoteInputPlugin(InputPlugin):
         self.input_queue = input_queue
 
     def get_keys(self, controller, buttons):
-        assert self.data_queue.empty(), "Data queue should be empty before processing input"
         if not self.controller_states:
             self.controller_states = {i: Buttons() for i in range(4)}
             match self.input_queue.get():
@@ -47,6 +46,7 @@ class RemoteInputPlugin(InputPlugin):
                     for i, state in enumerate(inputs):
                         self.controller_states[i] = state
 
+        assert self.data_queue.empty(), "Data queue should be empty before processing input"
         for field, *_ in Buttons._fields_:
             if controller in self.controller_states:
                 setattr(buttons.contents, field, getattr(self.controller_states[controller], field))
@@ -91,6 +91,7 @@ def emulator_process(rom_path, input_queue, data_queue):
     core.override_input_plugin(input_plugin)
 
     # Run the game
+    core.core_state_set(M64CORE_SPEED_LIMITER, 0)
     core.execute()
     core.detach_plugins()
     core.rom_close()
@@ -98,7 +99,7 @@ def emulator_process(rom_path, input_queue, data_queue):
 
 class N64Env(gym.Env):
     """Gymnasium environment for N64"""
-    metadata = {"render_modes": ["rgb_array"], "render_fps": 60}
+    metadata = {"render_modes": ["rgb_array"], "render_fps": 30}
 
     def __init__(self, rom_path, render_mode=None):
         super().__init__()
@@ -214,7 +215,6 @@ if __name__ == "__main__":
     env = N64Env(args.rom_path, render_mode="rgb_array")
     observation, info = env.reset()
 
-    fidx = 0
     running = True
     while running:
         for event in pygame.event.get():
@@ -232,14 +232,9 @@ if __name__ == "__main__":
         surf = pygame.surfarray.make_surface(observation.swapaxes(0, 1))
         screen.blit(surf, (0, 0))
         pygame.display.flip()
-        clock.tick(60)
+        clock.tick(30)
 
         if terminated or truncated:
-            observation, info = env.reset()
-
-        # Reset every 200 frames
-        fidx += 1
-        if fidx % 200 == 0:
             observation, info = env.reset()
 
     env.close()
