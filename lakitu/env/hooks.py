@@ -270,7 +270,7 @@ class InputPlugin:
         self.window = None
         self.core = core
         self.data_queue = data_queue
-        self.controller_states = {}
+        self.controller_states = None
 
         # Input callbacks
         self.gfx_funcs = M64pGfxPluginFunctions.in_dll(core.m64p, 'gfx')
@@ -293,16 +293,23 @@ class InputPlugin:
         control_info.Controls[3].Plugin = ControlPlugin.PLUGIN_NONE
 
     def get_keys(self, controller, buttons):
-        raise NotImplementedError()
+        if not self.controller_states:
+            self.controller_states = self.get_controller_states()
+        for field, *_ in Buttons._fields_:
+            setattr(buttons.contents, field, getattr(self.controller_states[controller], field))
+
+    def get_controller_states(self):
+        raise NotImplementedError("get_controller_states() must be implemented in a subclass")
 
     def render_callback(self):
         if not self.window:
             return
         if glfw.window_should_close(self.window):
             self.core.stop()
-        if self.data_queue:
+        if self.data_queue and self.controller_states:  # Only push one frame per input event
             # NOTE: We can also use glReadPixels to read the framebuffer, but using the official API removes the dependency on PyOpenGL
             width, height = glfw.get_window_size(self.window)
             buffer = np.zeros((height, width, 3), dtype=np.uint8)
             self.gfx_funcs.readScreen2(buffer.ctypes.data_as(C.POINTER(C.c_uint8)), C.byref(C.c_int(width)), C.byref(C.c_int(height)), 0)
             self.data_queue.put((buffer, self.controller_states))
+            self.controller_states = None

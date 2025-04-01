@@ -34,27 +34,17 @@ class RemoteInputPlugin(InputPlugin):
         super().__init__(core, data_queue)
         self.input_queue = input_queue
 
-    def get_keys(self, controller, buttons):
-        if not self.controller_states:
-            self.controller_states = {i: Buttons() for i in range(4)}
-            match self.input_queue.get():
-                case "STOP":
-                    self.core.stop()
-                case "RESET":
-                    self.core.reset()
-                case inputs:
-                    for i, state in enumerate(inputs):
-                        self.controller_states[i] = state
-
-        assert self.data_queue.empty(), "Data queue should be empty before processing input"
-        for field, *_ in Buttons._fields_:
-            if controller in self.controller_states:
-                setattr(buttons.contents, field, getattr(self.controller_states[controller], field))
-
-    def render_callback(self):
-        if self.controller_states:  # Only generate observations once we've received input
-            super().render_callback()
-        self.controller_states = {}
+    def get_controller_states(self):
+        controller_states = [Buttons() for _ in range(4)]
+        match self.input_queue.get():
+            case "STOP":
+                self.core.stop()
+            case "RESET":
+                self.core.reset()
+            case inputs:
+                for i, state in enumerate(inputs):
+                    controller_states[i] = state
+        return controller_states
 
 
 def emulator_process(rom_path, input_queue, data_queue):

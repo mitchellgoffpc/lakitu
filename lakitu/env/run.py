@@ -62,26 +62,21 @@ class KeyboardInputPlugin(InputPlugin):
             elif key == glfw.KEY_M:
                 self.core.toggle_mute()
 
-    def get_keys(self, controller, buttons):
-        self.controller_states[controller] = self.get_controller_state_from_keys(controller, self.pressed_keys)
-        for field, *_ in Buttons._fields_:
-            setattr(buttons.contents, field, getattr(self.controller_states[controller], field))
-
-    def get_controller_state_from_keys(self, controller, keys):
+    def get_controller_states(self):
         controller_state = Buttons()
         for key, button in KEYMAP['buttons'].items():
-            setattr(controller_state, button, int(key in keys))
-        x_axis = sum(value for key, value in KEYMAP['axes']['X_AXIS'].items() if key in keys)
-        y_axis = sum(value for key, value in KEYMAP['axes']['Y_AXIS'].items() if key in keys)
+            setattr(controller_state, button, int(key in self.pressed_keys))
+        x_axis = sum(value for key, value in KEYMAP['axes']['X_AXIS'].items() if key in self.pressed_keys)
+        y_axis = sum(value for key, value in KEYMAP['axes']['Y_AXIS'].items() if key in self.pressed_keys)
         magnitude = math.sqrt(x_axis**2 + y_axis**2) + 1e-6
         controller_state.X_AXIS = int(x_axis / magnitude * 127)
         controller_state.Y_AXIS = int(y_axis / magnitude * 127)
-        return controller_state
+        return [controller_state] + [Buttons()] * 3
 
 
 def encode(data_q):
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    width, height, fps = 640, 480, 60
+    width, height, fps = 640, 480, 30
     out = cv2.VideoWriter('output.mp4', fourcc, fps, (width, height))
 
     with open('controller_states.csv', 'w', newline='') as csvfile:
@@ -93,7 +88,7 @@ def encode(data_q):
         while (data := data_q.get()) is not None:
             frame, controller_states = data
             out.write(frame[::-1, :, ::-1])  # Convert RGB to BGR
-            for i, state in controller_states.items():
+            for i, state in enumerate(controller_states):
                 state_dict = {field: getattr(state, field) for field, *_ in Buttons._fields_}
                 writer.writerow({'frame_index': frame_count, 'controller_index': i, **state_dict})
             frame_count += 1
