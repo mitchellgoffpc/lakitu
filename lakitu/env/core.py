@@ -271,9 +271,7 @@ class Core:
 
     def detach_plugins(self):
         """Detaches plugins from the emulator core, and re-attaches the 'dummy' plugin functions."""
-        for plugin_type in PLUGIN_ORDER:
-            plugin = self.plugins[plugin_type]
-
+        for plugin_type, plugin in self.plugins.items():
             if not plugin:
                 plugin_map = list(self.plugin_map[plugin_type].values())[0]
             else:

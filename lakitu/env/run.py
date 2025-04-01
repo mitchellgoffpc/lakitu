@@ -42,15 +42,30 @@ KEYMAP = {
 }
 
 class KeyboardInputPlugin(InputPlugin):
+    def __init__(self, core, data_queue=None):
+        super().__init__(core, data_queue)
+        self.pressed_keys = set()
+
+    def init(self, window):
+        super().init(window)
+        glfw.set_key_callback(self.window, self.key_callback)
+
     def key_callback(self, window, key, scancode, action, mods):
-        super().key_callback(window, key, scancode, action, mods)
-        if action == glfw.PRESS:
+        if action == glfw.RELEASE:
+            self.pressed_keys.discard(key)
+        elif action == glfw.PRESS:
+            self.pressed_keys.add(key)
             if key == glfw.KEY_ESCAPE:
                 self.core.stop()
             elif key == glfw.KEY_L:
                 self.core.toggle_speed_limit(),
             elif key == glfw.KEY_M:
                 self.core.toggle_mute()
+
+    def get_keys(self, controller, buttons):
+        self.controller_states[controller] = self.get_controller_state_from_keys(controller, self.pressed_keys)
+        for field, *_ in Buttons._fields_:
+            setattr(buttons.contents, field, getattr(self.controller_states[controller], field))
 
     def get_controller_state_from_keys(self, controller, keys):
         controller_state = Buttons()
@@ -62,6 +77,7 @@ class KeyboardInputPlugin(InputPlugin):
         controller_state.X_AXIS = int(x_axis / magnitude * 127)
         controller_state.Y_AXIS = int(y_axis / magnitude * 127)
         return controller_state
+
 
 def encode(data_q):
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')

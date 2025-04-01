@@ -9,10 +9,11 @@ from lakitu.env.defs import *
 class VideoExtension:
     """Mupen64Plus video extension"""
 
-    def __init__(self, input_plugin):
+    def __init__(self, input_plugin, offscreen=False):
         """Constructor."""
         self.window = None
         self.input_plugin = input_plugin
+        self.offscreen = offscreen
         self.render_mode = M64P_RENDER_OPENGL
 
         # OpenGL attributes
@@ -120,7 +121,8 @@ class VideoExtension:
     def set_mode(self, width, height, bits, mode, flags):
         if self.render_mode == M64P_RENDER_OPENGL:
             glfw.set_window_size(self.window, width, height)
-            glfw.show_window(self.window)
+            if not self.offscreen:
+                glfw.show_window(self.window)
             glfw.make_context_current(self.window)
 
         return M64ERR_SUCCESS
@@ -269,7 +271,6 @@ class InputPlugin:
         self.core = core
         self.data_queue = data_queue
         self.controller_states = {}
-        self.pressed_keys = set()
 
         # Input callbacks
         self.gfx_funcs = M64pGfxPluginFunctions.in_dll(core.m64p, 'gfx')
@@ -280,7 +281,6 @@ class InputPlugin:
 
     def init(self, window):
         self.window = window
-        glfw.set_key_callback(self.window, self.key_callback)
 
     def initiate_controllers(self, control_info):
         control_info.Controls[0].Present = 1
@@ -293,10 +293,7 @@ class InputPlugin:
         control_info.Controls[3].Plugin = ControlPlugin.PLUGIN_NONE
 
     def get_keys(self, controller, buttons):
-        controller_state = self.get_controller_state_from_keys(controller, self.pressed_keys)
-        self.controller_states[controller] = controller_state
-        for field, *_ in Buttons._fields_:
-            setattr(buttons.contents, field, getattr(controller_state, field))
+        raise NotImplementedError()
 
     def render_callback(self):
         if not self.window:
@@ -309,13 +306,3 @@ class InputPlugin:
             buffer = np.zeros((height, width, 3), dtype=np.uint8)
             self.gfx_funcs.readScreen2(buffer.ctypes.data_as(C.POINTER(C.c_uint8)), C.byref(C.c_int(width)), C.byref(C.c_int(height)), 0)
             self.data_queue.put((buffer, self.controller_states))
-
-    def key_callback(self, window, key, scancode, action, mods):
-        if action == glfw.PRESS:
-            self.pressed_keys.add(key)
-        elif action == glfw.RELEASE:
-            self.pressed_keys.discard(key)
-
-    def get_controller_state_from_keys(self, controller, keys):
-        raise NotImplementedError("get_controller_state_from_keys() must be implemented in a subclass")
-
