@@ -13,7 +13,7 @@ from lakitu.env.defs import PluginType, ErrorType, M64pButtons
 
 LIBRARY_PATH = Path('/usr/local/lib')
 PLUGINS_PATH = LIBRARY_PATH / 'mupen64plus'
-CONFIG_PATH = Path('~/Developer/lakitu/config').expanduser()
+CONFIG_PATH = Path(__file__).parent / 'lib'
 DATA_PATH = Path('/usr/local/share/mupen64plus')
 
 BUTTONS = {
