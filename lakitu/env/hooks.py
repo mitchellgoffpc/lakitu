@@ -64,7 +64,7 @@ class VideoExtension:
 
             if self.gl_context_profile == GLProfile.CORE:
                 glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-            elif self.gl_context_profile == GLProfile.COMPAT:
+            elif self.gl_context_profile == GLProfile.COMPATIBILITY:
                 glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_COMPAT_PROFILE)
             elif self.gl_context_profile == GLProfile.ES:
                 glfw.window_hint(glfw.CLIENT_API, glfw.OPENGL_ES_API)

@@ -16,27 +16,25 @@ PLUGINS_PATH = LIBRARY_PATH / 'mupen64plus'
 CONFIG_PATH = Path('~/Developer/lakitu/config').expanduser()
 DATA_PATH = Path('/usr/local/share/mupen64plus')
 
-KEYMAP = {
-    'buttons': {
-        glfw.KEY_L: 'R_DPAD',
-        glfw.KEY_J: 'L_DPAD',
-        glfw.KEY_I: 'U_DPAD',
-        glfw.KEY_K: 'D_DPAD',
-        glfw.KEY_ENTER: 'START_BUTTON',
-        glfw.KEY_C: 'Z_TRIG',
-        glfw.KEY_X: 'B_BUTTON',
-        glfw.KEY_SPACE: 'A_BUTTON',
-        glfw.KEY_D: 'R_CBUTTON',
-        glfw.KEY_A: 'L_CBUTTON',
-        glfw.KEY_S: 'D_CBUTTON',
-        glfw.KEY_W: 'U_CBUTTON',
-        glfw.KEY_PERIOD: 'R_TRIG',
-        glfw.KEY_COMMA: 'L_TRIG',
-    },
-    'axes': {
-        'X_AXIS': {glfw.KEY_LEFT: -1, glfw.KEY_RIGHT: 1},
-        'Y_AXIS': {glfw.KEY_DOWN: -1, glfw.KEY_UP: 1},
-    },
+BUTTONS = {
+    glfw.KEY_L: 'R_DPAD',
+    glfw.KEY_J: 'L_DPAD',
+    glfw.KEY_I: 'U_DPAD',
+    glfw.KEY_K: 'D_DPAD',
+    glfw.KEY_ENTER: 'START_BUTTON',
+    glfw.KEY_C: 'Z_TRIG',
+    glfw.KEY_X: 'B_BUTTON',
+    glfw.KEY_SPACE: 'A_BUTTON',
+    glfw.KEY_D: 'R_CBUTTON',
+    glfw.KEY_A: 'L_CBUTTON',
+    glfw.KEY_S: 'D_CBUTTON',
+    glfw.KEY_W: 'U_CBUTTON',
+    glfw.KEY_PERIOD: 'R_TRIG',
+    glfw.KEY_COMMA: 'L_TRIG',
+}
+AXES = {
+    'X_AXIS': {glfw.KEY_LEFT: -1, glfw.KEY_RIGHT: 1},
+    'Y_AXIS': {glfw.KEY_DOWN: -1, glfw.KEY_UP: 1},
 }
 
 class KeyboardInputPlugin(InputPlugin):
@@ -62,10 +60,10 @@ class KeyboardInputPlugin(InputPlugin):
 
     def get_controller_states(self):
         controller_state = M64pButtons()
-        for key, button in KEYMAP['buttons'].items():
+        for key, button in BUTTONS.items():
             setattr(controller_state, button, int(key in self.pressed_keys))
-        x_axis = sum(value for key, value in KEYMAP['axes']['X_AXIS'].items() if key in self.pressed_keys)
-        y_axis = sum(value for key, value in KEYMAP['axes']['Y_AXIS'].items() if key in self.pressed_keys)
+        x_axis = sum(value for key, value in AXES['X_AXIS'].items() if key in self.pressed_keys)
+        y_axis = sum(value for key, value in AXES['Y_AXIS'].items() if key in self.pressed_keys)
         magnitude = math.sqrt(x_axis**2 + y_axis**2) + 1e-6
         controller_state.X_AXIS = int(x_axis / magnitude * 127)
         controller_state.Y_AXIS = int(y_axis / magnitude * 127)
@@ -73,7 +71,7 @@ class KeyboardInputPlugin(InputPlugin):
 
 
 def encode(data_q):
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    fourcc = cv2.VideoWriter.fourcc(*'mp4v')
     width, height, fps = 640, 480, 30
     out = cv2.VideoWriter('output.mp4', fourcc, fps, (width, height))
 
@@ -113,9 +111,9 @@ if __name__ == '__main__':
     core.core_startup(str(CONFIG_PATH), str(DATA_PATH), vidext=video_extension)
 
     plugin_files = []
-    for f in PLUGINS_PATH.iterdir():
-        if f.name.startswith("mupen64plus") and f.name.endswith(DLL_EXT) and f.name != DEFAULT_DYNLIB:
-            plugin_files.append(str(f))
+    for path in PLUGINS_PATH.iterdir():
+        if path.name.startswith("mupen64plus") and path.name.endswith(DLL_EXT) and path.name != DEFAULT_DYNLIB:
+            plugin_files.append(str(path))
 
     for plugin_path in plugin_files:
         core.plugin_load_try(plugin_path)

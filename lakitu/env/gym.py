@@ -51,9 +51,9 @@ def emulator_process(rom_path, input_queue, data_queue):
     core.core_startup(str(CONFIG_PATH), str(DATA_PATH), vidext=video_extension)
 
     plugin_files = []
-    for f in PLUGINS_PATH.iterdir():
-        if f.name.startswith("mupen64plus") and f.name.endswith(DLL_EXT) and f.name != DEFAULT_DYNLIB:
-            plugin_files.append(str(f))
+    for path in PLUGINS_PATH.iterdir():
+        if path.name.startswith("mupen64plus") and path.name.endswith(DLL_EXT) and path.name != DEFAULT_DYNLIB:
+            plugin_files.append(str(path))
 
     for plugin_path in plugin_files:
         core.plugin_load_try(plugin_path)
@@ -156,7 +156,7 @@ class N64Env(gym.Env):
         terminated = False
         truncated = False
         reward = 0.0
-        info = {}
+        info: dict = {}
 
         self.current_frame = observation
         return observation, reward, terminated, truncated, info

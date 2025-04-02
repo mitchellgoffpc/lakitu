@@ -225,6 +225,7 @@ class PosixLibraryLoader(LibraryLoader):
         if self._ld_so_cache is None:
             self._create_ld_so_cache()
 
+        assert self._ld_so_cache is not None
         result = self._ld_so_cache.get(libname)
         if result:
             yield result
@@ -240,7 +241,7 @@ class _WindowsLibrary:
             path = os.path.realpath(path)
             self.cdll = ctypes.cdll.LoadLibrary(path)
             self.windll = ctypes.windll.LoadLibrary(path)
-        except WindowsError:
+        except OSError:
             os.environ['PATH'] = ';'.join(
                 [os.path.dirname(path), os.environ['PATH']])
             path = os.path.basename(path)
@@ -270,12 +271,12 @@ class WindowsLibraryLoader(LibraryLoader):
                         result = getattr(ctypes.cdll, name % libname)
                         if result:
                             break
-                    except WindowsError:
+                    except OSError:
                         result = None
             if result is None:
                 try:
                     result = getattr(ctypes.cdll, libname)
-                except WindowsError:
+                except OSError:
                     result = None
             if result is None:
                 raise ImportError("%s not found." % libname) from None

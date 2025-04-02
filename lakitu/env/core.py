@@ -83,7 +83,7 @@ STATE_CALLBACK = STATEFUNC(state_callback)
 class Core:
     """Mupen64Plus Core library"""
 
-    plugin_map = {
+    plugin_map: dict[int, dict[str, tuple]] = {
         PluginType.RSP: {},
         PluginType.GFX: {},
         PluginType.AUDIO: {},
@@ -92,7 +92,6 @@ class Core:
 
     def __init__(self, core_path):
         """Constructor."""
-        self.m64p = None
         self.plugins = {}
         self.rom_type = None
         self.rom_length = None
@@ -101,20 +100,12 @@ class Core:
         self.core_path = core_path
         self.core_name = "Mupen64Plus Core"
         self.core_version = ""
-        self.core_load()
+        self.m64p = load(core_path)
+        self.check_version()
 
     def get_handle(self):
         """Retrieves core library handle."""
         return self.m64p
-
-    def core_load(self):
-        """Loads core library."""
-        try:
-            self.m64p = load(self.core_path)
-            self.check_version()
-        except Exception as err:
-            self.m64p = None
-            log.exception(str(err))
 
     def check_version(self):
         """Checks core API version."""
@@ -214,6 +205,7 @@ class Core:
             log.warn(str(err))
         else:
             if rval == ErrorType.SUCCESS:
+                assert name_ptr.contents.value is not None
                 return (
                     type_ptr.contents.value, ver_ptr.contents.value, api_ptr.contents.value,
                     name_ptr.contents.value.decode(), cap_ptr.contents.value)
