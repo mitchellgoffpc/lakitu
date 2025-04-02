@@ -1,10 +1,10 @@
 import glfw
-import queue
-import ctypes
+import ctypes as C
 import numpy as np
 import logging as log
 
-from lakitu.env.defs import *
+from lakitu.env.defs import ErrorType, RenderMode, ControllerPluginType, GLAttribute, GLProfile
+from lakitu.env.defs import VidExtFuncs, InputPluginFuncs, M64pButtons, M64pVideoExtension, M64pInputPlugin, M64pGfxPlugin
 
 class VideoExtension:
     """Mupen64Plus video extension"""
@@ -14,7 +14,7 @@ class VideoExtension:
         self.window = None
         self.input_plugin = input_plugin
         self.offscreen = offscreen
-        self.render_mode = M64P_RENDER_OPENGL
+        self.render_mode = RenderMode.OPENGL
 
         # OpenGL attributes
         self.gl_major_version = 3
@@ -28,45 +28,45 @@ class VideoExtension:
         self.gl_blue_size = 8
         self.gl_alpha_size = 8
         self.gl_multisample_samples = 0
-        self.gl_context_profile = M64P_GL_CONTEXT_PROFILE_CORE
+        self.gl_context_profile = GLProfile.CORE
 
-        # Video callbacks
-        self.callbacks = M64pVideoExtensionFunctions()
-        self.callbacks.Functions = 17
-        self.callbacks.VidExtFuncInit = FuncInit(self.init)
-        self.callbacks.VidExtFuncQuit = FuncQuit(self.quit)
-        self.callbacks.VidExtFuncListModes = FuncListModes(self.list_modes)
-        self.callbacks.VidExtFuncListRates = FuncListRates(self.list_rates)
-        self.callbacks.VidExtFuncSetMode = FuncSetMode(self.set_mode)
-        self.callbacks.VidExtFuncSetModeWithRate = FuncSetModeWithRate(self.set_mode_with_rate)
-        self.callbacks.VidExtFuncGLGetProc = FuncGLGetProc(self.gl_get_proc)
-        self.callbacks.VidExtFuncGLSetAttr = FuncGLSetAttr(self.gl_set_attr)
-        self.callbacks.VidExtFuncGLGetAttr = FuncGLGetAttr(self.gl_get_attr)
-        self.callbacks.VidExtFuncGLSwapBuf = FuncGLSwapBuf(self.gl_swap_buf)
-        self.callbacks.VidExtFuncSetCaption = FuncSetCaption(self.set_caption)
-        self.callbacks.VidExtFuncToggleFS = FuncToggleFS(self.toggle_fs)
-        self.callbacks.VidExtFuncResizeWindow = FuncResizeWindow(self.resize_window)
-        self.callbacks.VidExtFuncGLGetDefaultFramebuffer = FuncGLGetDefaultFramebuffer(self.gl_get_default_framebuffer)
-        self.callbacks.VidExtFuncInitWithRenderMode = FuncInitWithRenderMode(self.init_with_render_mode)
-        self.callbacks.VidExtFuncVKGetSurface = FuncVKGetSurface(self.vk_get_surface)
-        self.callbacks.VidExtFuncVKGetInstanceExtensions = FuncVKGetInstanceExtensions(self.vk_get_instance_extensions)
+        # Video extension struct
+        self.extension = M64pVideoExtension()
+        self.extension.Functions = 17
+        self.extension.VidExtFuncInit = VidExtFuncs.Init(self.init)
+        self.extension.VidExtFuncQuit = VidExtFuncs.Quit(self.quit)
+        self.extension.VidExtFuncListModes = VidExtFuncs.ListModes(self.list_modes)
+        self.extension.VidExtFuncListRates = VidExtFuncs.ListRates(self.list_rates)
+        self.extension.VidExtFuncSetMode = VidExtFuncs.SetMode(self.set_mode)
+        self.extension.VidExtFuncSetModeWithRate = VidExtFuncs.SetModeWithRate(self.set_mode_with_rate)
+        self.extension.VidExtFuncGLGetProc = VidExtFuncs.GLGetProc(self.gl_get_proc)
+        self.extension.VidExtFuncGLSetAttr = VidExtFuncs.GLSetAttr(self.gl_set_attr)
+        self.extension.VidExtFuncGLGetAttr = VidExtFuncs.GLGetAttr(self.gl_get_attr)
+        self.extension.VidExtFuncGLSwapBuf = VidExtFuncs.GLSwapBuf(self.gl_swap_buf)
+        self.extension.VidExtFuncSetCaption = VidExtFuncs.SetCaption(self.set_caption)
+        self.extension.VidExtFuncToggleFS = VidExtFuncs.ToggleFS(self.toggle_fs)
+        self.extension.VidExtFuncResizeWindow = VidExtFuncs.ResizeWindow(self.resize_window)
+        self.extension.VidExtFuncGLGetDefaultFramebuffer = VidExtFuncs.GLGetDefaultFramebuffer(self.gl_get_default_framebuffer)
+        self.extension.VidExtFuncInitWithRenderMode = VidExtFuncs.InitWithRenderMode(self.init_with_render_mode)
+        self.extension.VidExtFuncVKGetSurface = VidExtFuncs.VKGetSurface(self.vk_get_surface)
+        self.extension.VidExtFuncVKGetInstanceExtensions = VidExtFuncs.VKGetInstanceExtensions(self.vk_get_instance_extensions)
 
     def init(self):
-        if self.render_mode == M64P_RENDER_OPENGL:
+        if self.render_mode == RenderMode.OPENGL:
             if not glfw.init():
                 log.error("Failed to initialize GLFW")
-                return M64ERR_SYSTEM_FAIL
+                return ErrorType.SYSTEM_FAIL
 
             # Configure GLFW
             glfw.window_hint(glfw.VISIBLE, glfw.FALSE)
             glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, self.gl_major_version)
             glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, self.gl_minor_version)
 
-            if self.gl_context_profile == M64P_GL_CONTEXT_PROFILE_CORE:
+            if self.gl_context_profile == GLProfile.CORE:
                 glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-            elif self.gl_context_profile == M64P_GL_CONTEXT_PROFILE_COMPATIBILITY:
+            elif self.gl_context_profile == GLProfile.COMPAT:
                 glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_COMPAT_PROFILE)
-            elif self.gl_context_profile == M64P_GL_CONTEXT_PROFILE_ES:
+            elif self.gl_context_profile == GLProfile.ES:
                 glfw.window_hint(glfw.CLIENT_API, glfw.OPENGL_ES_API)
 
             glfw.window_hint(glfw.DEPTH_BITS, self.gl_depth_size)
@@ -83,49 +83,49 @@ class VideoExtension:
             if not self.window:
                 glfw.terminate()
                 log.error("Failed to create GLFW window")
-                return M64ERR_SYSTEM_FAIL
+                return ErrorType.SYSTEM_FAIL
 
             # Make the window's context current
             glfw.make_context_current(self.window)
             glfw.swap_interval(self.gl_swap_interval)
             self.input_plugin.init(self.window)
 
-        elif self.render_mode == M64P_RENDER_VULKAN:
+        elif self.render_mode == RenderMode.VULKAN:
             pass
 
-        return M64ERR_SUCCESS
+        return ErrorType.SUCCESS
 
     def init_with_render_mode(self, mode):
         self.render_mode = mode
         return self.init()
 
     def quit(self):
-        if self.render_mode == M64P_RENDER_OPENGL:
+        if self.render_mode == RenderMode.OPENGL:
             if self.window:
                 glfw.destroy_window(self.window)
                 self.window = None
                 glfw.terminate()
 
-        return M64ERR_SUCCESS
+        return ErrorType.SUCCESS
 
     def list_modes(self, size_array, num_sizes):
         """Enumerate the available resolutions for fullscreen video modes."""
         num_sizes.contents.value = 0
-        return M64ERR_SUCCESS
+        return ErrorType.SUCCESS
 
     def list_rates(self, size_array, num_rates, rates):
         """Enumerate the available rates for fullscreen video modes."""
         num_rates.contents.value = 0
-        return M64ERR_SUCCESS
+        return ErrorType.SUCCESS
 
     def set_mode(self, width, height, bits, mode, flags):
-        if self.render_mode == M64P_RENDER_OPENGL:
+        if self.render_mode == RenderMode.OPENGL:
             glfw.set_window_size(self.window, width, height)
             if not self.offscreen:
                 glfw.show_window(self.window)
             glfw.make_context_current(self.window)
 
-        return M64ERR_SUCCESS
+        return ErrorType.SUCCESS
 
     def set_mode_with_rate(self, width, height, rate, bits, mode, flags):
         return self.set_mode(width, height, bits, mode, flags)
@@ -135,15 +135,15 @@ class VideoExtension:
         title_str = "M64Py :: %s" % title.decode()
         if self.window:
             glfw.set_window_title(self.window, title_str)
-        return M64ERR_SUCCESS
+        return ErrorType.SUCCESS
 
     def toggle_fs(self):
         """Toggle between fullscreen and windowed rendering modes. """
-        return M64ERR_SUCCESS
+        return ErrorType.SUCCESS
 
     def gl_get_proc(self, proc):
         """Get a pointer to an OpenGL extension function."""
-        if self.render_mode != M64P_RENDER_OPENGL:
+        if self.render_mode != RenderMode.OPENGL:
             return 0
         if not self.window:
             return 0
@@ -158,111 +158,111 @@ class VideoExtension:
 
     def gl_set_attr(self, attr, value):
         """Set OpenGL attributes."""
-        if self.render_mode != M64P_RENDER_OPENGL:
-            return M64ERR_INVALID_STATE
+        if self.render_mode != RenderMode.OPENGL:
+            return ErrorType.INVALID_STATE
 
         # Store the attribute for later use when creating the window
-        if attr == M64P_GL_DOUBLEBUFFER:
+        if attr == GLAttribute.DOUBLEBUFFER:
             self.gl_doublebuffer = bool(value)
-        elif attr == M64P_GL_BUFFER_SIZE:
+        elif attr == GLAttribute.BUFFER_SIZE:
             val = int(value/4)
             self.gl_red_size = val
             self.gl_green_size = val
             self.gl_blue_size = val
             self.gl_alpha_size = val
-        elif attr == M64P_GL_DEPTH_SIZE:
+        elif attr == GLAttribute.DEPTH_SIZE:
             self.gl_depth_size = value
-        elif attr == M64P_GL_RED_SIZE:
+        elif attr == GLAttribute.RED_SIZE:
             self.gl_red_size = value
-        elif attr == M64P_GL_GREEN_SIZE:
+        elif attr == GLAttribute.GREEN_SIZE:
             self.gl_green_size = value
-        elif attr == M64P_GL_BLUE_SIZE:
+        elif attr == GLAttribute.BLUE_SIZE:
             self.gl_blue_size = value
-        elif attr == M64P_GL_ALPHA_SIZE:
+        elif attr == GLAttribute.ALPHA_SIZE:
             self.gl_alpha_size = value
-        elif attr == M64P_GL_SWAP_CONTROL:
+        elif attr == GLAttribute.SWAP_CONTROL:
             self.gl_swap_interval = value
             if self.window:
                 glfw.swap_interval(value)
-        elif attr == M64P_GL_MULTISAMPLESAMPLES:
+        elif attr == GLAttribute.MULTISAMPLESAMPLES:
             self.gl_multisample_samples = value
-        elif attr == M64P_GL_CONTEXT_MAJOR_VERSION:
+        elif attr == GLAttribute.CONTEXT_MAJOR_VERSION:
             self.gl_major_version = value
-        elif attr == M64P_GL_CONTEXT_MINOR_VERSION:
+        elif attr == GLAttribute.CONTEXT_MINOR_VERSION:
             self.gl_minor_version = value
-        elif attr == M64P_GL_CONTEXT_PROFILE_MASK:
+        elif attr == GLAttribute.CONTEXT_PROFILE_MASK:
             self.gl_context_profile = value
 
-        return M64ERR_SUCCESS
+        return ErrorType.SUCCESS
 
     def gl_get_attr(self, attr, value):
         """Get OpenGL attributes."""
-        if self.render_mode != M64P_RENDER_OPENGL:
-            return M64ERR_INVALID_STATE
+        if self.render_mode != RenderMode.OPENGL:
+            return ErrorType.INVALID_STATE
 
-        if attr == M64P_GL_DOUBLEBUFFER:
+        if attr == GLAttribute.DOUBLEBUFFER:
             new_value = 1 if self.gl_doublebuffer else 0
-        elif attr == M64P_GL_BUFFER_SIZE:
+        elif attr == GLAttribute.BUFFER_SIZE:
             new_value = self.gl_red_size + self.gl_green_size + self.gl_blue_size + self.gl_alpha_size
-        elif attr == M64P_GL_DEPTH_SIZE:
+        elif attr == GLAttribute.DEPTH_SIZE:
             new_value = self.gl_depth_size
-        elif attr == M64P_GL_RED_SIZE:
+        elif attr == GLAttribute.RED_SIZE:
             new_value = self.gl_red_size
-        elif attr == M64P_GL_GREEN_SIZE:
+        elif attr == GLAttribute.GREEN_SIZE:
             new_value = self.gl_green_size
-        elif attr == M64P_GL_BLUE_SIZE:
+        elif attr == GLAttribute.BLUE_SIZE:
             new_value = self.gl_blue_size
-        elif attr == M64P_GL_ALPHA_SIZE:
+        elif attr == GLAttribute.ALPHA_SIZE:
             new_value = self.gl_alpha_size
-        elif attr == M64P_GL_SWAP_CONTROL:
+        elif attr == GLAttribute.SWAP_CONTROL:
             new_value = self.gl_swap_interval
-        elif attr == M64P_GL_MULTISAMPLESAMPLES:
+        elif attr == GLAttribute.MULTISAMPLESAMPLES:
             new_value = self.gl_multisample_samples
-        elif attr == M64P_GL_CONTEXT_MAJOR_VERSION:
+        elif attr == GLAttribute.CONTEXT_MAJOR_VERSION:
             new_value = self.gl_major_version
-        elif attr == M64P_GL_CONTEXT_MINOR_VERSION:
+        elif attr == GLAttribute.CONTEXT_MINOR_VERSION:
             new_value = self.gl_minor_version
-        elif attr == M64P_GL_CONTEXT_PROFILE_MASK:
+        elif attr == GLAttribute.CONTEXT_PROFILE_MASK:
             new_value = self.gl_context_profile
         else:
-            return M64ERR_INPUT_INVALID
+            return ErrorType.INPUT_INVALID
 
         value.contents.value = new_value
         if new_value != value.contents.value:  # Hmm very suspicious, not sure why this would ever happen...
-            return M64ERR_SYSTEM_FAIL
-        return M64ERR_SUCCESS
+            return ErrorType.SYSTEM_FAIL
+        return ErrorType.SUCCESS
 
     def gl_swap_buf(self):
         """Swap the front/back buffers after rendering an output video frame."""
-        if self.render_mode != M64P_RENDER_OPENGL:
-            return M64ERR_INVALID_STATE
+        if self.render_mode != RenderMode.OPENGL:
+            return ErrorType.INVALID_STATE
 
         if self.window:
             glfw.swap_buffers(self.window)
             glfw.poll_events()
 
-        return M64ERR_SUCCESS
+        return ErrorType.SUCCESS
 
     def resize_window(self, width, height):
         """Called when the video plugin has resized its OpenGL output viewport in response to a ResizeVideoOutput() call"""
         if self.window:
             glfw.set_window_size(self.window, width, height)
-        return M64ERR_SUCCESS
+        return ErrorType.SUCCESS
 
     def gl_get_default_framebuffer(self):
-        if self.render_mode != M64P_RENDER_OPENGL:
+        if self.render_mode != RenderMode.OPENGL:
             return 0
         return 0  # GLFW uses the default framebuffer (0)
 
     def vk_get_surface(self, a, b):
-        if self.render_mode != M64P_RENDER_VULKAN:
-            return M64ERR_INVALID_STATE
-        return M64ERR_SUCCESS
+        if self.render_mode != RenderMode.VULKAN:
+            return ErrorType.INVALID_STATE
+        return ErrorType.SUCCESS
 
     def vk_get_instance_extensions(self, a, b):
-        if self.render_mode != M64P_RENDER_VULKAN:
-            return M64ERR_INVALID_STATE
-        return M64ERR_SUCCESS
+        if self.render_mode != RenderMode.VULKAN:
+            return ErrorType.INVALID_STATE
+        return ErrorType.SUCCESS
 
 
 class InputPlugin:
@@ -272,30 +272,30 @@ class InputPlugin:
         self.data_queue = data_queue
         self.controller_states = None
 
-        # Input callbacks
-        self.gfx_funcs = M64pGfxPluginFunctions.in_dll(core.m64p, 'gfx')
-        self.callbacks = M64pInputPluginFunctions()
-        self.callbacks.getKeys = FuncGetKeys(self.get_keys)
-        self.callbacks.initiateControllers = FuncInitiateControllers(self.initiate_controllers)
-        self.callbacks.renderCallback = FuncRenderCallback(self.render_callback)
+        # Input Plugin struct
+        self.gfx_plugin = M64pGfxPlugin.in_dll(core.m64p, 'gfx')
+        self.input_plugin = M64pInputPlugin()
+        self.input_plugin.getKeys = InputPluginFuncs.GetKeys(self.get_keys)
+        self.input_plugin.initiateControllers = InputPluginFuncs.InitiateControllers(self.initiate_controllers)
+        self.input_plugin.renderCallback = InputPluginFuncs.RenderCallback(self.render_callback)
 
     def init(self, window):
         self.window = window
 
     def initiate_controllers(self, control_info):
         control_info.Controls[0].Present = 1
-        control_info.Controls[0].Plugin = ControlPlugin.PLUGIN_MEMPAK
+        control_info.Controls[0].Plugin = ControllerPluginType.MEMPAK
         control_info.Controls[1].Present = 0
-        control_info.Controls[1].Plugin = ControlPlugin.PLUGIN_NONE
+        control_info.Controls[1].Plugin = ControllerPluginType.NONE
         control_info.Controls[2].Present = 0
-        control_info.Controls[2].Plugin = ControlPlugin.PLUGIN_NONE
+        control_info.Controls[2].Plugin = ControllerPluginType.NONE
         control_info.Controls[3].Present = 0
-        control_info.Controls[3].Plugin = ControlPlugin.PLUGIN_NONE
+        control_info.Controls[3].Plugin = ControllerPluginType.NONE
 
     def get_keys(self, controller, buttons):
         if not self.controller_states:
             self.controller_states = self.get_controller_states()
-        for field, *_ in Buttons._fields_:
+        for field, *_ in M64pButtons._fields_:
             setattr(buttons.contents, field, getattr(self.controller_states[controller], field))
 
     def get_controller_states(self):
@@ -310,6 +310,6 @@ class InputPlugin:
             # NOTE: We can also use glReadPixels to read the framebuffer, but using the official API removes the dependency on PyOpenGL
             width, height = glfw.get_window_size(self.window)
             buffer = np.zeros((height, width, 3), dtype=np.uint8)
-            self.gfx_funcs.readScreen2(buffer.ctypes.data_as(C.POINTER(C.c_uint8)), C.byref(C.c_int(width)), C.byref(C.c_int(height)), 0)
+            self.gfx_plugin.readScreen2(buffer.ctypes.data_as(C.POINTER(C.c_uint8)), C.byref(C.c_int(width)), C.byref(C.c_int(height)), 0)
             self.data_queue.put((buffer, self.controller_states))
             self.controller_states = None

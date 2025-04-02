@@ -25,11 +25,13 @@ dev = [
 packages = ["lakitu"]
 
 [tool.ruff]
-line-length = 88
+line-length = 140
 target-version = "py38"
-select = ["E", "F", "I", "N", "W", "B"]
-ignore = []
 exclude = ["lakitu/env/lib/"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "B"]
+ignore = ["I001", "N812", "N813"]
 
 [tool.mypy]
 python_version = "3.8"

@@ -1,18 +1,12 @@
-import cv2
-import time
-import glfw
 import numpy as np
 import multiprocessing
-import logging as log
 import gymnasium as gym
-from gymnasium import spaces
 from pathlib import Path
-from collections import deque
 
-from lakitu.env.core import Core
-from lakitu.env.defs import *
+from lakitu.env.core import Core, PLUGIN_DEFAULT
 from lakitu.env.hooks import VideoExtension, InputPlugin
-from lakitu.env.platforms import DEFAULT_DYNLIB
+from lakitu.env.platforms import DEFAULT_DYNLIB, DLL_EXT
+from lakitu.env.defs import PluginType, ErrorType, CoreState, M64pButtons
 
 LIBRARY_PATH = Path('/usr/local/lib')
 PLUGINS_PATH = LIBRARY_PATH / 'mupen64plus'
@@ -35,15 +29,15 @@ class RemoteInputPlugin(InputPlugin):
         self.input_queue = input_queue
 
     def get_controller_states(self):
-        controller_states = [Buttons() for _ in range(4)]
-        match self.input_queue.get():
-            case "STOP":
-                self.core.stop()
-            case "RESET":
-                self.core.reset()
-            case inputs:
-                for i, state in enumerate(inputs):
-                    controller_states[i] = state
+        controller_states = [M64pButtons() for _ in range(4)]
+        next_input = self.input_queue.get()
+        if next_input == "STOP":
+            self.core.stop()
+        elif next_input == "RESET":
+            self.core.reset()
+        else:
+            for i, state in enumerate(next_input):
+                controller_states[i] = state
         return controller_states
 
 
@@ -65,23 +59,23 @@ def emulator_process(rom_path, input_queue, data_queue):
         core.plugin_load_try(plugin_path)
 
     for plugin_type in core.plugin_map.keys():
-        for plugin_handle, plugin_path, plugin_name, plugin_desc, plugin_version in core.plugin_map[plugin_type].values():
+        for plugin_handle, _plugin_path, plugin_name, plugin_desc, _plugin_version in core.plugin_map[plugin_type].values():
             core.plugin_startup(plugin_handle, plugin_name, plugin_desc)
 
     # Open the ROM file
     with open(rom_path, 'rb') as f:
         romfile = f.read()
     rval = core.rom_open(romfile)
-    if rval == M64ERR_SUCCESS:
+    if rval == ErrorType.SUCCESS:
         core.rom_get_header()
         core.rom_get_settings()
 
     # Attach plugins
-    core.attach_plugins({plugin_type: PLUGIN_DEFAULT[plugin_type] for plugin_type in (M64PLUGIN_GFX, M64PLUGIN_RSP)})
+    core.attach_plugins({plugin_type: PLUGIN_DEFAULT[plugin_type] for plugin_type in (PluginType.GFX, PluginType.RSP)})
     core.override_input_plugin(input_plugin)
 
     # Run the game
-    core.core_state_set(M64CORE_SPEED_LIMITER, 0)
+    core.core_state_set(CoreState.SPEED_LIMITER, 0)
     core.execute()
     core.detach_plugins()
     core.rom_close()
@@ -104,10 +98,10 @@ class N64Env(gym.Env):
         self.data_queue = self.ctx.Queue()
 
         # Define observation and action spaces
-        self.observation_space = spaces.Box(low=0, high=255, shape=(480, 640, 3), dtype=np.uint8)
-        self.action_space = spaces.Dict({
-            'joystick': spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
-            'buttons': spaces.MultiBinary(14),
+        self.observation_space = gym.spaces.Box(low=0, high=255, shape=(480, 640, 3), dtype=np.uint8)
+        self.action_space = gym.spaces.Dict({
+            'joystick': gym.spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32),
+            'buttons': gym.spaces.MultiBinary(14),
         })
 
     def _start_emulator(self):
@@ -149,7 +143,7 @@ class N64Env(gym.Env):
         if magnitude > 1.0:
             joystick = joystick / magnitude  # Normalize to unit circle
 
-        controller_state = Buttons()
+        controller_state = M64pButtons()
         controller_state.X_AXIS = int(joystick[0] * 127)
         controller_state.Y_AXIS = int(joystick[1] * 127)
         for i, button_name in enumerate(BUTTON_NAMES):

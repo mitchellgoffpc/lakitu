@@ -84,7 +84,7 @@ class LibraryLoader:
             else:
                 return ctypes.cdll.LoadLibrary(path)
         except OSError as e:
-            raise ImportError(e)
+            raise ImportError() from e
 
     def getpaths(self, libname):
         if os.path.isabs(libname):
@@ -278,7 +278,7 @@ class WindowsLibraryLoader(LibraryLoader):
                 except WindowsError:
                     result = None
             if result is None:
-                raise ImportError("%s not found." % libname)
+                raise ImportError("%s not found." % libname) from None
         return result
 
     def load(self, path):

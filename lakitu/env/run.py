@@ -1,17 +1,15 @@
 import cv2
 import csv
 import math
-import time
 import glfw
 import argparse
-import threading
 import multiprocessing
 from pathlib import Path
 
-from lakitu.env.core import Core
-from lakitu.env.defs import *
+from lakitu.env.core import Core, PLUGIN_DEFAULT
 from lakitu.env.hooks import VideoExtension, InputPlugin
-from lakitu.env.platforms import DEFAULT_DYNLIB
+from lakitu.env.platforms import DEFAULT_DYNLIB, DLL_EXT
+from lakitu.env.defs import PluginType, ErrorType, M64pButtons
 
 LIBRARY_PATH = Path('/usr/local/lib')
 PLUGINS_PATH = LIBRARY_PATH / 'mupen64plus'
@@ -63,7 +61,7 @@ class KeyboardInputPlugin(InputPlugin):
                 self.core.toggle_mute()
 
     def get_controller_states(self):
-        controller_state = Buttons()
+        controller_state = M64pButtons()
         for key, button in KEYMAP['buttons'].items():
             setattr(controller_state, button, int(key in self.pressed_keys))
         x_axis = sum(value for key, value in KEYMAP['axes']['X_AXIS'].items() if key in self.pressed_keys)
@@ -71,7 +69,7 @@ class KeyboardInputPlugin(InputPlugin):
         magnitude = math.sqrt(x_axis**2 + y_axis**2) + 1e-6
         controller_state.X_AXIS = int(x_axis / magnitude * 127)
         controller_state.Y_AXIS = int(y_axis / magnitude * 127)
-        return [controller_state] + [Buttons()] * 3
+        return [controller_state] + [M64pButtons()] * 3
 
 
 def encode(data_q):
@@ -80,7 +78,7 @@ def encode(data_q):
     out = cv2.VideoWriter('output.mp4', fourcc, fps, (width, height))
 
     with open('controller_states.csv', 'w', newline='') as csvfile:
-        fieldnames = ['frame_index', 'controller_index'] + [field for field, *_ in Buttons._fields_]
+        fieldnames = ['frame_index', 'controller_index'] + [field for field, *_ in M64pButtons._fields_]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
 
@@ -89,7 +87,7 @@ def encode(data_q):
             frame, controller_states = data
             out.write(frame[::-1, :, ::-1])  # Convert RGB to BGR
             for i, state in enumerate(controller_states):
-                state_dict = {field: getattr(state, field) for field, *_ in Buttons._fields_}
+                state_dict = {field: getattr(state, field) for field, *_ in M64pButtons._fields_}
                 writer.writerow({'frame_index': frame_count, 'controller_index': i, **state_dict})
             frame_count += 1
 
@@ -123,19 +121,19 @@ if __name__ == '__main__':
         core.plugin_load_try(plugin_path)
 
     for plugin_type in core.plugin_map.keys():
-        for plugin_handle, plugin_path, plugin_name, plugin_desc, plugin_version in core.plugin_map[plugin_type].values():
+        for plugin_handle, _plugin_path, plugin_name, plugin_desc, _plugin_version in core.plugin_map[plugin_type].values():
             core.plugin_startup(plugin_handle, plugin_name, plugin_desc)
 
     # Open the ROM file
     with open(args.path, 'rb') as f:
         romfile = f.read()
     rval = core.rom_open(romfile)
-    if rval == M64ERR_SUCCESS:
+    if rval == ErrorType.SUCCESS:
         core.rom_get_header()
         core.rom_get_settings()
 
     # Attach plugins
-    core.attach_plugins({plugin_type: PLUGIN_DEFAULT[plugin_type] for plugin_type in PLUGIN_ORDER})
+    core.attach_plugins({plugin_type: PLUGIN_DEFAULT[plugin_type] for plugin_type in (PluginType.GFX, PluginType.AUDIO, PluginType.RSP)})
     core.override_input_plugin(input_plugin)
 
     # Run the game

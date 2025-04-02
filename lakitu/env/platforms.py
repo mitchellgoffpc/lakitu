@@ -1,4 +1,3 @@
-import os
 import sys
 
 if sys.platform.startswith("linux"):
