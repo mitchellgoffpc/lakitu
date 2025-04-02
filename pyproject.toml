@@ -13,6 +13,8 @@ authors = [
 ]
 dependencies = [
     "glfw",
+    "gymnasium",
+    "numpy",
 ]
 
 [project.optional-dependencies]
