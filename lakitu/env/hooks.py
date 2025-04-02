@@ -3,8 +3,8 @@ import ctypes as C
 import numpy as np
 import logging as log
 
-from lakitu.env.defs import ErrorType, RenderMode, ControllerPluginType, GLAttribute, GLProfile
-from lakitu.env.defs import VidExtFuncs, InputPluginFuncs, M64pButtons, M64pVideoExtension, M64pInputPlugin, M64pGfxPlugin
+from lakitu.env.defs import ErrorType, PluginType, RenderMode, ControllerPluginType, GLAttribute, GLProfile
+from lakitu.env.defs import VidExtFuncs, InputPluginFuncs, M64pButtons, M64pVideoExtension, M64pInputPlugin
 
 class VideoExtension:
     """Mupen64Plus video extension"""
@@ -273,7 +273,6 @@ class InputPlugin:
         self.controller_states = None
 
         # Input Plugin struct
-        self.gfx_plugin = M64pGfxPlugin.in_dll(core.m64p, 'gfx')
         self.input_plugin = M64pInputPlugin()
         self.input_plugin.getKeys = InputPluginFuncs.GetKeys(self.get_keys)
         self.input_plugin.initiateControllers = InputPluginFuncs.InitiateControllers(self.initiate_controllers)
@@ -281,6 +280,7 @@ class InputPlugin:
 
     def init(self, window):
         self.window = window
+        self.gfx = self.core.plugin_map[PluginType.GFX]["mupen64plus-video-GLideN64.dylib"][0]
 
     def initiate_controllers(self, control_info):
         control_info.Controls[0].Present = 1
@@ -310,6 +310,6 @@ class InputPlugin:
             # NOTE: We can also use glReadPixels to read the framebuffer, but using the official API removes the dependency on PyOpenGL
             width, height = glfw.get_window_size(self.window)
             buffer = np.zeros((height, width, 3), dtype=np.uint8)
-            self.gfx_plugin.readScreen2(buffer.ctypes.data_as(C.POINTER(C.c_uint8)), C.byref(C.c_int(width)), C.byref(C.c_int(height)), 0)
+            self.gfx.ReadScreen2(buffer.ctypes.data_as(C.POINTER(C.c_uint8)), C.byref(C.c_int(width)), C.byref(C.c_int(height)), 0)
             self.data_queue.put((buffer, self.controller_states))
             self.controller_states = None

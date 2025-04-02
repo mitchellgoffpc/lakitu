@@ -268,32 +268,3 @@ class M64pInputPlugin(C.Structure):
         ('clearVRUWords', C.c_void_p),
         ('setVRUWordMask', C.c_void_p),
     ]
-
-
-# Graphics Plugin Types
-
-FuncReadScreen = C.CFUNCTYPE(None, C.c_void_p, C.POINTER(C.c_int), C.POINTER(C.c_int), C.c_int)
-
-class M64pGfxPlugin(C.Structure):
-    _fields_ = [
-        ('getVersion', C.c_void_p),
-        ('changeWindow', C.c_void_p),
-        ('initiateGFX', C.c_void_p),
-        ('moveScreen', C.c_void_p),
-        ('processDList', C.c_void_p),
-        ('processRDPList', C.c_void_p),
-        ('romClosed', C.c_void_p),
-        ('romOpen', C.c_void_p),
-        ('showCFB', C.c_void_p),
-        ('updateScreen', C.c_void_p),
-        ('viStatusChanged', C.c_void_p),
-        ('viWidthChanged', C.c_void_p),
-        ('readScreen2', FuncReadScreen),
-        ('setRenderingCallback', C.c_void_p),
-        ('resizeVideoOutput', C.c_void_p),
-
-        # frame buffer plugin spec extension
-        ('fBRead', C.c_void_p),
-        ('fBWrite', C.c_void_p),
-        ('fBGetFrameBufferInfo', C.c_void_p)
-    ]
