@@ -1,0 +1,12 @@
+[submodule "lakitu/env/lib/mupen64plus-core"]
+	path = lakitu/env/lib/mupen64plus-core
+	url = git@github.com:mupen64plus/mupen64plus-core.git
+[submodule "lakitu/env/lib/mupen64plus-audio-sdl"]
+	path = lakitu/env/lib/mupen64plus-audio-sdl
+	url = git@github.com:mupen64plus/mupen64plus-audio-sdl.git
+[submodule "lakitu/env/lib/mupen64plus-rsp-hle"]
+	path = lakitu/env/lib/mupen64plus-rsp-hle
+	url = git@github.com:mupen64plus/mupen64plus-rsp-hle.git
+[submodule "lakitu/env/lib/GLideN64"]
+	path = lakitu/env/lib/GLideN64
+	url = git@github.com:gonetz/GLideN64.git
