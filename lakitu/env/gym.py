@@ -23,8 +23,8 @@ BUTTON_NAMES = [
 class RemoteInputExtension(InputExtension):
     """Input plugin that receives controller states from a queue"""
 
-    def __init__(self, core, input_queue, data_queue):
-        super().__init__(core, data_queue)
+    def __init__(self, core, input_queue, data_queue, savestate_path=None):
+        super().__init__(core, data_queue, savestate_path)
         self.input_queue = input_queue
 
     def get_controller_states(self):
@@ -40,11 +40,11 @@ class RemoteInputExtension(InputExtension):
         return controller_states
 
 
-def emulator_process(rom_path, input_queue, data_queue):
+def emulator_process(rom_path, savestate_path, input_queue, data_queue):
     """Process that runs the emulator"""
     # Load the core and plugins
     core = Core()
-    input_extension = RemoteInputExtension(core, input_queue, data_queue)
+    input_extension = RemoteInputExtension(core, input_queue, data_queue, savestate_path)
     video_extension = VideoExtension(input_extension, offscreen=True)
     core.core_startup(vidext=video_extension, inputext=input_extension)
     core.load_plugins()
@@ -69,9 +69,10 @@ class N64Env(gym.Env):
     """Gymnasium environment for N64"""
     metadata = {"render_modes": ["rgb_array"], "render_fps": 30}
 
-    def __init__(self, rom_path, render_mode=None):
+    def __init__(self, rom_path, savestate_path=None, render_mode=None):
         super().__init__()
         self.rom_path = rom_path
+        self.savestate_path = savestate_path
         self.render_mode = render_mode
         self.emulator_proc = None
         self.current_frame = None
@@ -95,7 +96,7 @@ class N64Env(gym.Env):
 
         self.emulator_proc = self.ctx.Process(
             target=emulator_process,
-            args=(self.rom_path, self.input_queue, self.data_queue),
+            args=(self.rom_path, self.savestate_path, self.input_queue, self.data_queue),
             daemon=True
         )
         self.emulator_proc.start()
@@ -172,6 +173,7 @@ if __name__ == "__main__":
     import pygame
     parser = argparse.ArgumentParser(description='Run N64 Gym Environment')
     parser.add_argument('rom_path', type=str, help='Path to the ROM file')
+    parser.add_argument('-s', '--savestate', type=str, default=None, help='Path to save state file')
     args = parser.parse_args()
 
     # Initialize Pygame
@@ -180,7 +182,7 @@ if __name__ == "__main__":
     pygame.display.set_caption('N64')
     clock = pygame.time.Clock()
 
-    env = N64Env(args.rom_path, render_mode="rgb_array")
+    env = N64Env(args.rom_path, args.savestate, render_mode="rgb_array")
     observation, info = env.reset()
 
     running = True

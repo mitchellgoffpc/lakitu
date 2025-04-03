@@ -2,6 +2,7 @@ import cv2
 import csv
 import math
 import glfw
+import shutil
 import argparse
 import datetime
 import multiprocessing
@@ -33,8 +34,8 @@ AXES = {
 }
 
 class KeyboardInputExtension(InputExtension):
-    def __init__(self, core, data_queue=None):
-        super().__init__(core, data_queue)
+    def __init__(self, core, data_queue=None, savestate_path=None):
+        super().__init__(core, data_queue, savestate_path)
         self.pressed_keys = set()
 
     def init(self, window):
@@ -52,6 +53,12 @@ class KeyboardInputExtension(InputExtension):
                 self.core.toggle_speed_limit(),
             elif key == glfw.KEY_M:
                 self.core.toggle_mute()
+            elif key == glfw.KEY_GRAVE_ACCENT:
+                savestate_dir = Path(__file__).parent.parent / 'data' / 'savestates'
+                savestate_dir.mkdir(parents=True, exist_ok=True)
+                savestate_paths = (savestate_dir / f'savestate_{i}.m64p' for i in range(100))
+                savestate_path = next(path for path in savestate_paths if not path.exists())
+                self.core.state_save(str(savestate_path))
 
     def get_controller_states(self):
         controller_state = M64pButtons()
@@ -65,11 +72,13 @@ class KeyboardInputExtension(InputExtension):
         return [controller_state] + [M64pButtons()] * 3
 
 
-def encode(data_q):
+def encode(data_queue, savestate_path):
     current_time = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    result_path = Path(__file__).parent.parent / 'data' / current_time
+    result_path = Path(__file__).parent.parent / 'data' / 'rollouts' / current_time
     result_path.mkdir(parents=True, exist_ok=True)
 
+    if savestate_path:
+        shutil.copy(savestate_path, result_path / 'initial_state.m64p')
     fourcc = cv2.VideoWriter.fourcc(*'mp4v')
     width, height, fps = 320, 240, 30
     out = cv2.VideoWriter(str(result_path / 'observations.mp4'), fourcc, fps, (width, height))
@@ -80,7 +89,7 @@ def encode(data_q):
         writer.writeheader()
 
         frame_count = 0
-        while (data := data_q.get()) is not None:
+        while (data := data_queue.get()) is not None:
             frame, controller_states = data
             frame = cv2.resize(frame[::-1, :, ::-1], (width, height))  # Flip vertically and convert to BGR
             out.write(frame)
@@ -95,17 +104,18 @@ def encode(data_q):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Run Lakitu environment')
     parser.add_argument('path', type=str, help='ROM Path')
+    parser.add_argument('-s', '--savestate', type=str, default=None, help='Path to save state file')
     args = parser.parse_args()
     assert Path(args.path).is_file(), f"File {args.path!r} does not exist"
 
     # Create a queue for saving data to disk
     ctx = multiprocessing.get_context('spawn')
     data_queue = ctx.Queue()
-    encoder_thread = ctx.Process(target=encode, args=(data_queue,))
+    encoder_thread = ctx.Process(target=encode, args=(data_queue, args.savestate))
 
     # Load the core and plugins
     core = Core()
-    input_extension = KeyboardInputExtension(core, data_queue=data_queue)
+    input_extension = KeyboardInputExtension(core, data_queue=data_queue, savestate_path=args.savestate)
     video_extension = VideoExtension(input_extension)
     core.core_startup(vidext=video_extension, inputext=input_extension)
     core.load_plugins()

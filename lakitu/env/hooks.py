@@ -266,10 +266,11 @@ class VideoExtension:
 
 
 class InputExtension:
-    def __init__(self, core, data_queue=None):
+    def __init__(self, core, data_queue=None, savestate_path=None):
         self.window = None
         self.core = core
         self.data_queue = data_queue
+        self.savestate_path = savestate_path
         self.controller_states = None
 
         # Input extension struct
@@ -306,10 +307,14 @@ class InputExtension:
             return
         if glfw.window_should_close(self.window):
             self.core.stop()
-        if self.data_queue and self.controller_states:  # Only push one frame per input event
+        if self.savestate_path:
+            self.core.state_load(self.savestate_path)
+        elif self.data_queue and self.controller_states:  # Only push one frame per input event
             # NOTE: We can also use glReadPixels to read the framebuffer, but using the official API removes the dependency on PyOpenGL
             width, height = glfw.get_window_size(self.window)
             buffer = np.zeros((height, width, 3), dtype=np.uint8)
             self.gfx.ReadScreen2(buffer.ctypes.data_as(C.POINTER(C.c_uint8)), C.byref(C.c_int(width)), C.byref(C.c_int(height)), 0)
             self.data_queue.put((buffer, self.controller_states))
-            self.controller_states = None
+
+        self.savestate_path = None
+        self.controller_states = None
