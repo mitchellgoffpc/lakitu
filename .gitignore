@@ -3,7 +3,15 @@ __pycache__
 .venv
 .ruff_cache
 .mypy_cache
+*.egg-info
+dist
+*.dylib
+*.so
 
 # system
 .DS_Store
 .vscode
+
+# data
+lakitu/data
+*.z64

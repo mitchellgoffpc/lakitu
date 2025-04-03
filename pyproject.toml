@@ -23,9 +23,6 @@ dev = [
     "mypy",
 ]
 
-[tool.setuptools]
-packages = ["lakitu"]
-
 [tool.ruff]
 line-length = 140
 target-version = "py38"
