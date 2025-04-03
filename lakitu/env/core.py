@@ -19,11 +19,12 @@ import sys
 import binascii
 import ctypes as C
 import logging as log
+from pathlib import Path
 
 from lakitu.env.loader import load, unload_library
 from lakitu.env.platforms import DLL_EXT
 from lakitu.env.defs import LogLevel, ErrorType, PluginType, CoreFlags, CoreState, CoreCommand, EmulationState
-from lakitu.env.defs import M64pRomHeader, M64pRomSettings, M64pInputPlugin
+from lakitu.env.defs import M64pRomHeader, M64pRomSettings
 
 VERBOSE = False
 CORE_API_VERSION = 0x20001
@@ -31,24 +32,26 @@ CONFIG_API_VERSION = 0x20302
 VIDEXT_API_VERSION = 0x030300
 MINIMUM_CORE_VERSION = 0x020600
 
+CORE_LIB_PATH = Path(__file__).parent / 'lib'
+
 ROM_TYPE = {
     b'80371240': 'z64 (native)',
     b'37804012': 'v64 (byteswapped)',
     b'40123780': 'n64 (wordswapped)'
 }
 
-PLUGIN_NAME = {
+PLUGIN_NAMES = {
     PluginType.RSP: b"RSP",
     PluginType.GFX: b"Video",
     PluginType.AUDIO: b"Audio",
     PluginType.INPUT: b"Input"
 }
 
-PLUGIN_DEFAULT = {
+PLUGIN_PATHS = {
     PluginType.RSP: "mupen64plus-rsp-hle%s" % DLL_EXT,
     PluginType.GFX: "mupen64plus-video-GLideN64%s" % DLL_EXT,
     PluginType.AUDIO: "mupen64plus-audio-sdl%s" % DLL_EXT,
-    PluginType.INPUT: "mupen64plus-input-sdl%s" % DLL_EXT
+    PluginType.INPUT: "mupen64plus-input-ext%s" % DLL_EXT
 }
 
 def version_split(ver):
@@ -83,24 +86,19 @@ STATE_CALLBACK = STATEFUNC(state_callback)
 class Core:
     """Mupen64Plus Core library"""
 
-    plugin_map: dict[int, dict[str, tuple]] = {
-        PluginType.RSP: {},
-        PluginType.GFX: {},
-        PluginType.AUDIO: {},
-        PluginType.INPUT: {}
-    }
-
-    def __init__(self, core_path):
+    def __init__(self):
         """Constructor."""
-        self.plugins = {}
+        self.plugins = []
+        self.plugin_map = {}
+        self.inputext = None
         self.rom_type = None
         self.rom_length = None
         self.rom_header = M64pRomHeader()
         self.rom_settings = M64pRomSettings()
-        self.core_path = core_path
+        self.core_path = str(CORE_LIB_PATH / 'libmupen64plus.dylib')
         self.core_name = "Mupen64Plus Core"
         self.core_version = ""
-        self.m64p = load(core_path)
+        self.m64p = load(self.core_path)
         self.check_version()
 
     def get_handle(self):
@@ -166,13 +164,14 @@ class Core:
         rval = self.m64p.CoreErrorMessage(return_code).decode()
         return rval
 
-    def core_startup(self, config_path, data_path, vidext=None):
+    def core_startup(self, vidext=None, inputext=None):
         """Initializes libmupen64plus for use by allocating memory,
         creating data structures, and loading the configuration file."""
         rval = self.m64p.CoreStartup(
-            C.c_int(CORE_API_VERSION), C.c_char_p(config_path.encode()), C.c_char_p(data_path.encode()),
+            C.c_int(CORE_API_VERSION), C.c_char_p(str(CORE_LIB_PATH).encode()), C.c_char_p(str(CORE_LIB_PATH).encode()),
             C.c_char_p(b"Core"), DEBUG_CALLBACK, C.c_char_p(b"State"), STATE_CALLBACK)
         if rval == ErrorType.SUCCESS:
+            self.inputext = inputext
             if vidext:
                 self.override_vidext(vidext)
         else:
@@ -228,73 +227,63 @@ class Core:
             log.warn(self.error_message(rval))
             return None
 
-    def plugin_load_try(self, plugin_path=None):
+    def load_plugins(self):
+        """Loads and starts all plugins."""
+        for plugin_type, plugin_path in PLUGIN_PATHS.items():
+            self.plugin_load(CORE_LIB_PATH / plugin_path)
+            self.plugin_startup(plugin_type)
+
+    def plugin_load(self, plugin_path):
         """Loads plugins and maps them by plugin type."""
         try:
             plugin_handle = C.cdll.LoadLibrary(plugin_path)
             version = self.plugin_get_version(plugin_handle, plugin_path)
             if version:
                 plugin_type, plugin_version, plugin_api, plugin_desc, plugin_cap = version
-                plugin_name = os.path.basename(plugin_path)
-                self.plugin_map[plugin_type][plugin_name] = (
-                    plugin_handle, plugin_path, PLUGIN_NAME[plugin_type], plugin_desc, plugin_version)
+                self.plugin_map[plugin_type] = (plugin_handle, plugin_path, PLUGIN_NAMES[plugin_type], plugin_desc, plugin_version)
         except OSError as e:
-            log.debug("plugin_load_try()")
+            log.debug("plugin_load()")
             plugin_path = plugin_path.encode('ascii').decode('ascii', 'ignore')
             log.error("failed to load plugin %s: %s" % (plugin_path, e))
 
-    def plugin_startup(self, handle, name, desc):
+    def plugin_startup(self, plugin_type):
         """This function initializes plugin for use by allocating memory, creating data structures, and loading the configuration data."""
-        rval = handle.PluginStartup(C.c_void_p(self.m64p._handle), name, DEBUG_CALLBACK)
+        plugin_handle, _, plugin_name, plugin_desc, _ = self.plugin_map[plugin_type]
+        rval = plugin_handle.PluginStartup(C.c_void_p(self.m64p._handle), plugin_name, DEBUG_CALLBACK)
         if rval != ErrorType.SUCCESS:
             log.debug("plugin_startup()")
             log.warn(self.error_message(rval))
-            log.warn("%s failed to start." % desc)
+            log.warn("%s failed to start." % plugin_desc)
+        elif plugin_type == PluginType.INPUT and self.inputext:
+            self.override_inputext(self.inputext)
 
-    def plugin_shutdown(self, handle, desc):
+    def plugin_shutdown(self, plugin_type):
         """This function destroys data structures and releases memory allocated by the plugin library. """
-        rval = handle.PluginShutdown()
+        plugin_handle, _, _, plugin_desc, _ = self.plugin_map[plugin_type]
+        rval = plugin_handle.PluginShutdown()
         if rval != ErrorType.SUCCESS:
             log.debug("plugin_shutdown()")
             log.warn(self.error_message(rval))
-            log.warn("%s failed to stop." % desc)
+            log.warn("%s failed to stop." % plugin_desc)
 
-    def attach_plugins(self, plugins):
+    def attach_plugins(self, plugin_types):
         """Attaches plugins to the emulator core."""
-        self.plugins = plugins
-        for plugin_type, plugin in plugins.items():
-            if not plugin:
-                plugin_map = list(self.plugin_map[plugin_type].values())[0]
-            else:
-                try:
-                    plugin_map = self.plugin_map[plugin_type][plugin]
-                except KeyError:
-                    continue
-
-            plugin_handle, plugin_path, plugin_name, plugin_desc, plugin_version = plugin_map
+        self.plugins = plugin_types
+        for plugin_type in plugin_types:
+            plugin_handle, plugin_path, plugin_name, plugin_desc, plugin_version = self.plugin_map[plugin_type]
 
             rval = self.m64p.CoreAttachPlugin(C.c_int(plugin_type), C.c_void_p(plugin_handle._handle))
             if rval != ErrorType.SUCCESS:
                 log.debug("attach_plugins()")
                 log.warn(self.error_message(rval))
-                log.warn("core failed to attach %s plugin." % (
-                    plugin_name))
+                log.warn("core failed to attach %s plugin." % (plugin_name))
             else:
-                log.info("using %s plugin: '%s' v%s" % (
-                    plugin_name.decode(), plugin_desc, version_split(plugin_version)))
+                log.info("using %s plugin: '%s' v%s" % (plugin_name.decode(), plugin_desc, version_split(plugin_version)))
 
     def detach_plugins(self):
         """Detaches plugins from the emulator core, and re-attaches the 'dummy' plugin functions."""
-        for plugin_type, plugin in self.plugins.items():
-            if not plugin:
-                plugin_map = list(self.plugin_map[plugin_type].values())[0]
-            else:
-                try:
-                    plugin_map = self.plugin_map[plugin_type][plugin]
-                except KeyError:
-                    continue
-
-            plugin_handle, plugin_path, plugin_name, plugin_desc, plugin_version = plugin_map
+        for plugin_type in self.plugins:
+            plugin_handle, plugin_path, plugin_name, plugin_desc, plugin_version = self.plugin_map[plugin_type]
 
             rval = self.m64p.CoreDetachPlugin(plugin_type)
             if rval != ErrorType.SUCCESS:
@@ -480,9 +469,12 @@ class Core:
             log.info("video extension enabled")
         return rval
 
-    def override_input_plugin(self, plugin):
-        input_plugin = M64pInputPlugin.in_dll(self.m64p, "input")
-        input_plugin.getKeys = plugin.input_plugin.getKeys
-        input_plugin.initiateControllers = plugin.input_plugin.initiateControllers
-        input_plugin.renderCallback = plugin.input_plugin.renderCallback
-        self.m64p.plugin_start(PluginType.INPUT)
+    def override_inputext(self, inputext):
+        plugin_handle, *_ = self.plugin_map[PluginType.INPUT]
+        rval = plugin_handle.OverrideInputExt(C.pointer(inputext.extension))
+        if rval != ErrorType.SUCCESS:
+            log.debug("override_inputext()")
+            log.warn(self.error_message(rval))
+        else:
+            log.info("input extension enabled")
+        return rval

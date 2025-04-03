@@ -3,18 +3,13 @@ import csv
 import math
 import glfw
 import argparse
+import datetime
 import multiprocessing
 from pathlib import Path
 
-from lakitu.env.core import Core, PLUGIN_DEFAULT
-from lakitu.env.hooks import VideoExtension, InputPlugin
-from lakitu.env.platforms import DEFAULT_DYNLIB, DLL_EXT
+from lakitu.env.core import Core
+from lakitu.env.hooks import VideoExtension, InputExtension
 from lakitu.env.defs import PluginType, ErrorType, M64pButtons
-
-LIBRARY_PATH = Path('/usr/local/lib')
-PLUGINS_PATH = LIBRARY_PATH / 'mupen64plus'
-CONFIG_PATH = Path(__file__).parent / 'lib'
-DATA_PATH = Path('/usr/local/share/mupen64plus')
 
 BUTTONS = {
     glfw.KEY_L: 'R_DPAD',
@@ -37,7 +32,7 @@ AXES = {
     'Y_AXIS': {glfw.KEY_DOWN: -1, glfw.KEY_UP: 1},
 }
 
-class KeyboardInputPlugin(InputPlugin):
+class KeyboardInputExtension(InputExtension):
     def __init__(self, core, data_queue=None):
         super().__init__(core, data_queue)
         self.pressed_keys = set()
@@ -71,11 +66,15 @@ class KeyboardInputPlugin(InputPlugin):
 
 
 def encode(data_q):
-    fourcc = cv2.VideoWriter.fourcc(*'mp4v')
-    width, height, fps = 640, 480, 30
-    out = cv2.VideoWriter('output.mp4', fourcc, fps, (width, height))
+    current_time = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    result_path = Path(__file__).parent.parent / 'data' / current_time
+    result_path.mkdir(parents=True, exist_ok=True)
 
-    with open('controller_states.csv', 'w', newline='') as csvfile:
+    fourcc = cv2.VideoWriter.fourcc(*'mp4v')
+    width, height, fps = 320, 240, 30
+    out = cv2.VideoWriter(str(result_path / 'observations.mp4'), fourcc, fps, (width, height))
+
+    with open(result_path / 'actions.csv', 'w', newline='') as csvfile:
         fieldnames = ['frame_index', 'controller_index'] + [field for field, *_ in M64pButtons._fields_]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
@@ -83,7 +82,8 @@ def encode(data_q):
         frame_count = 0
         while (data := data_q.get()) is not None:
             frame, controller_states = data
-            out.write(frame[::-1, :, ::-1])  # Convert RGB to BGR
+            frame = cv2.resize(frame[::-1, :, ::-1], (width, height))  # Flip vertically and convert to BGR
+            out.write(frame)
             for i, state in enumerate(controller_states):
                 state_dict = {field: getattr(state, field) for field, *_ in M64pButtons._fields_}
                 writer.writerow({'frame_index': frame_count, 'controller_index': i, **state_dict})
@@ -104,23 +104,11 @@ if __name__ == '__main__':
     encoder_thread = ctx.Process(target=encode, args=(data_queue,))
 
     # Load the core and plugins
-    core = Core(str(LIBRARY_PATH / 'libmupen64plus.dylib'))
-    input_plugin = KeyboardInputPlugin(core, data_queue=data_queue)
-    video_extension = VideoExtension(input_plugin)
-
-    core.core_startup(str(CONFIG_PATH), str(DATA_PATH), vidext=video_extension)
-
-    plugin_files = []
-    for path in PLUGINS_PATH.iterdir():
-        if path.name.startswith("mupen64plus") and path.name.endswith(DLL_EXT) and path.name != DEFAULT_DYNLIB:
-            plugin_files.append(str(path))
-
-    for plugin_path in plugin_files:
-        core.plugin_load_try(plugin_path)
-
-    for plugin_type in core.plugin_map.keys():
-        for plugin_handle, _plugin_path, plugin_name, plugin_desc, _plugin_version in core.plugin_map[plugin_type].values():
-            core.plugin_startup(plugin_handle, plugin_name, plugin_desc)
+    core = Core()
+    input_extension = KeyboardInputExtension(core, data_queue=data_queue)
+    video_extension = VideoExtension(input_extension)
+    core.core_startup(vidext=video_extension, inputext=input_extension)
+    core.load_plugins()
 
     # Open the ROM file
     with open(args.path, 'rb') as f:
@@ -130,12 +118,9 @@ if __name__ == '__main__':
         core.rom_get_header()
         core.rom_get_settings()
 
-    # Attach plugins
-    core.attach_plugins({plugin_type: PLUGIN_DEFAULT[plugin_type] for plugin_type in (PluginType.GFX, PluginType.AUDIO, PluginType.RSP)})
-    core.override_input_plugin(input_plugin)
-
     # Run the game
     encoder_thread.start()
+    core.attach_plugins([PluginType.GFX, PluginType.AUDIO, PluginType.INPUT, PluginType.RSP])
     core.execute()
 
     data_queue.put(None)

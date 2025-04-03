@@ -4,15 +4,15 @@ import numpy as np
 import logging as log
 
 from lakitu.env.defs import ErrorType, PluginType, RenderMode, ControllerPluginType, GLAttribute, GLProfile
-from lakitu.env.defs import VidExtFuncs, InputPluginFuncs, M64pButtons, M64pVideoExtension, M64pInputPlugin
+from lakitu.env.defs import VidExtFuncs, InputExtFuncs, M64pButtons, M64pVideoExtension, M64pInputExtension
 
 class VideoExtension:
     """Mupen64Plus video extension"""
 
-    def __init__(self, input_plugin, offscreen=False):
+    def __init__(self, input_extension, offscreen=False):
         """Constructor."""
         self.window = None
-        self.input_plugin = input_plugin
+        self.input_extension = input_extension
         self.offscreen = offscreen
         self.render_mode = RenderMode.OPENGL
 
@@ -88,7 +88,7 @@ class VideoExtension:
             # Make the window's context current
             glfw.make_context_current(self.window)
             glfw.swap_interval(self.gl_swap_interval)
-            self.input_plugin.init(self.window)
+            self.input_extension.init(self.window)
 
         elif self.render_mode == RenderMode.VULKAN:
             pass
@@ -265,22 +265,22 @@ class VideoExtension:
         return ErrorType.SUCCESS
 
 
-class InputPlugin:
+class InputExtension:
     def __init__(self, core, data_queue=None):
         self.window = None
         self.core = core
         self.data_queue = data_queue
         self.controller_states = None
 
-        # Input Plugin struct
-        self.input_plugin = M64pInputPlugin()
-        self.input_plugin.getKeys = InputPluginFuncs.GetKeys(self.get_keys)
-        self.input_plugin.initiateControllers = InputPluginFuncs.InitiateControllers(self.initiate_controllers)
-        self.input_plugin.renderCallback = InputPluginFuncs.RenderCallback(self.render_callback)
+        # Input extension struct
+        self.extension = M64pInputExtension()
+        self.extension.InputExtFuncGetKeys =  InputExtFuncs.GetKeys(self.get_keys)
+        self.extension.InputExtFuncInitiateControllers = InputExtFuncs.InitiateControllers(self.initiate_controllers)
+        self.extension.InputExtFuncRenderCallback = InputExtFuncs.RenderCallback(self.render_callback)
 
     def init(self, window):
         self.window = window
-        self.gfx = self.core.plugin_map[PluginType.GFX]["mupen64plus-video-GLideN64.dylib"][0]
+        self.gfx, *_ = self.core.plugin_map[PluginType.GFX]
 
     def initiate_controllers(self, control_info):
         control_info.Controls[0].Present = 1

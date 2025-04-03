@@ -3,9 +3,8 @@ import multiprocessing
 import gymnasium as gym
 from pathlib import Path
 
-from lakitu.env.core import Core, PLUGIN_DEFAULT
-from lakitu.env.hooks import VideoExtension, InputPlugin
-from lakitu.env.platforms import DEFAULT_DYNLIB, DLL_EXT
+from lakitu.env.core import Core
+from lakitu.env.hooks import VideoExtension, InputExtension
 from lakitu.env.defs import PluginType, ErrorType, CoreState, M64pButtons
 
 LIBRARY_PATH = Path('/usr/local/lib')
@@ -21,7 +20,7 @@ BUTTON_NAMES = [
     'L_TRIG', 'R_TRIG'
 ]
 
-class RemoteInputPlugin(InputPlugin):
+class RemoteInputExtension(InputExtension):
     """Input plugin that receives controller states from a queue"""
 
     def __init__(self, core, input_queue, data_queue):
@@ -44,23 +43,11 @@ class RemoteInputPlugin(InputPlugin):
 def emulator_process(rom_path, input_queue, data_queue):
     """Process that runs the emulator"""
     # Load the core and plugins
-    core = Core(str(LIBRARY_PATH / 'libmupen64plus.dylib'))
-    input_plugin = RemoteInputPlugin(core, input_queue, data_queue)
-    video_extension = VideoExtension(input_plugin, offscreen=True)
-
-    core.core_startup(str(CONFIG_PATH), str(DATA_PATH), vidext=video_extension)
-
-    plugin_files = []
-    for path in PLUGINS_PATH.iterdir():
-        if path.name.startswith("mupen64plus") and path.name.endswith(DLL_EXT) and path.name != DEFAULT_DYNLIB:
-            plugin_files.append(str(path))
-
-    for plugin_path in plugin_files:
-        core.plugin_load_try(plugin_path)
-
-    for plugin_type in core.plugin_map.keys():
-        for plugin_handle, _plugin_path, plugin_name, plugin_desc, _plugin_version in core.plugin_map[plugin_type].values():
-            core.plugin_startup(plugin_handle, plugin_name, plugin_desc)
+    core = Core()
+    input_extension = RemoteInputExtension(core, input_queue, data_queue)
+    video_extension = VideoExtension(input_extension, offscreen=True)
+    core.core_startup(vidext=video_extension, inputext=input_extension)
+    core.load_plugins()
 
     # Open the ROM file
     with open(rom_path, 'rb') as f:
@@ -70,11 +57,8 @@ def emulator_process(rom_path, input_queue, data_queue):
         core.rom_get_header()
         core.rom_get_settings()
 
-    # Attach plugins
-    core.attach_plugins({plugin_type: PLUGIN_DEFAULT[plugin_type] for plugin_type in (PluginType.GFX, PluginType.RSP)})
-    core.override_input_plugin(input_plugin)
-
     # Run the game
+    core.attach_plugins([PluginType.GFX, PluginType.INPUT, PluginType.RSP])
     core.core_state_set(CoreState.SPEED_LIMITER, 0)
     core.execute()
     core.detach_plugins()

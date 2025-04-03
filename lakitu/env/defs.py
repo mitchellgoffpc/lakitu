@@ -207,7 +207,7 @@ class M64pVideoExtension(C.Structure):
     ]
 
 
-# Input Plugin Types
+# Input Extension Types
 
 class M64pButtons(C.Structure):
     _pack_ = 1
@@ -245,26 +245,14 @@ class M64pControlInfo(C.Structure):
         ('Controls', C.POINTER(M64pControl))
     ]
 
-class InputPluginFuncs:
+class InputExtFuncs:
     GetKeys = C.CFUNCTYPE(None, C.c_int, C.POINTER(M64pButtons))
     InitiateControllers = C.CFUNCTYPE(None, M64pControlInfo)
     RenderCallback = C.CFUNCTYPE(None)
 
-class M64pInputPlugin(C.Structure):
+class M64pInputExtension(C.Structure):
     _fields_ = [
-        ('getVersion', C.c_void_p),
-        ('controllerCommand', C.c_void_p),
-        ('getKeys', InputPluginFuncs.GetKeys),
-        ('initiateControllers', InputPluginFuncs.InitiateControllers),
-        ('readController', C.c_void_p),
-        ('romClosed', C.c_void_p),
-        ('romOpen', C.c_void_p),
-        ('sdlKeyDown', C.c_void_p),
-        ('sdlKeyUp', C.c_void_p),
-        ('renderCallback', InputPluginFuncs.RenderCallback),
-        ('sendVRUWord', C.c_void_p),
-        ('setMicState', C.c_void_p),
-        ('readVRUResults', C.c_void_p),
-        ('clearVRUWords', C.c_void_p),
-        ('setVRUWordMask', C.c_void_p),
+        ('InputExtFuncGetKeys', InputExtFuncs.GetKeys),
+        ('InputExtFuncInitiateControllers', InputExtFuncs.InitiateControllers),
+        ('InputExtFuncRenderCallback', InputExtFuncs.RenderCallback),
     ]
