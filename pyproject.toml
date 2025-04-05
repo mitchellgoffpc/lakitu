@@ -15,6 +15,7 @@ dependencies = [
     "glfw",
     "gymnasium",
     "numpy",
+    "pyav",
 ]
 
 [project.optional-dependencies]
