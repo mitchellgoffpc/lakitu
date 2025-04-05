@@ -1,5 +1,6 @@
-import cv2
+import av
 import csv
+import cv2
 import math
 import glfw
 import shutil
@@ -79,9 +80,17 @@ def encode(data_queue, savestate_path):
 
     if savestate_path:
         shutil.copy(savestate_path, result_path / 'initial_state.m64p')
-    fourcc = cv2.VideoWriter.fourcc(*'mp4v')
+
     width, height, fps = 320, 240, 30
-    out = cv2.VideoWriter(str(result_path / 'observations.mp4'), fourcc, fps, (width, height))
+    container = av.open(str(result_path / 'observations.mp4'), mode='w')
+    stream = container.add_stream('h264', rate=fps)
+    stream.width = width
+    stream.height = height
+    stream.pix_fmt = 'yuv420p'  # Common pixel format for H.264
+    stream.options = {
+        'crf': '23',
+        'g': '30',
+    }
 
     with open(result_path / 'actions.csv', 'w', newline='') as csvfile:
         fieldnames = ['frame_index', 'controller_index'] + [field for field, *_ in M64pButtons._fields_]
@@ -91,14 +100,18 @@ def encode(data_queue, savestate_path):
         frame_count = 0
         while (data := data_queue.get()) is not None:
             frame, controller_states = data
-            frame = cv2.resize(frame[::-1, :, ::-1], (width, height))  # Flip vertically and convert to BGR
-            out.write(frame)
+            frame = cv2.resize(frame[::-1], (width, height))
+            av_frame = av.VideoFrame.from_ndarray(frame, format='rgb24')
+            packet = stream.encode(av_frame)
+            container.mux(packet)
             for i, state in enumerate(controller_states):
                 state_dict = {field: getattr(state, field) for field, *_ in M64pButtons._fields_}
                 writer.writerow({'frame_index': frame_count, 'controller_index': i, **state_dict})
             frame_count += 1
 
-    out.release()
+    packet = stream.encode(None)
+    container.mux(packet)
+    container.close()
 
 
 if __name__ == '__main__':
