@@ -15,7 +15,7 @@ dependencies = [
     "glfw",
     "gymnasium",
     "numpy",
-    "pyav",
+    "av",
 ]
 
 [project.optional-dependencies]
@@ -48,5 +48,5 @@ cache_dir = "/dev/null"
 exclude = ["^lakitu/env/lib"]
 
 [[tool.mypy.overrides]]
-module = "glfw"
+module = "glfw,hid"
 ignore_missing_imports = true

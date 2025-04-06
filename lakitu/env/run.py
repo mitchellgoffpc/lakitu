@@ -1,6 +1,7 @@
 import av
 import csv
 import cv2
+import hid
 import glfw
 import json
 import math
@@ -14,35 +15,70 @@ from lakitu.env.core import Core
 from lakitu.env.hooks import VideoExtension, InputExtension
 from lakitu.env.defs import PluginType, ErrorType, M64pButtons
 
-BUTTONS = {
-    glfw.KEY_L: 'R_DPAD',
-    glfw.KEY_J: 'L_DPAD',
-    glfw.KEY_I: 'U_DPAD',
-    glfw.KEY_K: 'D_DPAD',
-    glfw.KEY_ENTER: 'START_BUTTON',
-    glfw.KEY_C: 'Z_TRIG',
-    glfw.KEY_X: 'B_BUTTON',
-    glfw.KEY_SPACE: 'A_BUTTON',
-    glfw.KEY_D: 'R_CBUTTON',
-    glfw.KEY_A: 'L_CBUTTON',
-    glfw.KEY_S: 'D_CBUTTON',
-    glfw.KEY_W: 'U_CBUTTON',
-    glfw.KEY_PERIOD: 'R_TRIG',
-    glfw.KEY_COMMA: 'L_TRIG',
-}
-AXES = {
+KEYBOARD_AXES = {
     'X_AXIS': {glfw.KEY_LEFT: -1, glfw.KEY_RIGHT: 1},
     'Y_AXIS': {glfw.KEY_DOWN: -1, glfw.KEY_UP: 1},
 }
+
+KEYBOARD_BUTTONS = {
+    'R_DPAD': glfw.KEY_L,
+    'L_DPAD': glfw.KEY_J,
+    'U_DPAD': glfw.KEY_I,
+    'D_DPAD': glfw.KEY_K,
+    'START_BUTTON': glfw.KEY_ENTER,
+    'Z_TRIG': glfw.KEY_C,
+    'B_BUTTON': glfw.KEY_X,
+    'A_BUTTON': glfw.KEY_SPACE,
+    'R_CBUTTON': glfw.KEY_D,
+    'L_CBUTTON': glfw.KEY_A,
+    'D_CBUTTON': glfw.KEY_S,
+    'U_CBUTTON': glfw.KEY_W,
+    'R_TRIG': glfw.KEY_PERIOD,
+    'L_TRIG': glfw.KEY_COMMA,
+}
+
+CONTROLLER_BUTTONS = {
+    'R_DPAD': lambda report: (report[5] >> 2) & 1,
+    'L_DPAD': lambda report: (report[5] >> 3) & 1,
+    'U_DPAD': lambda report: (report[5] >> 1) & 1,
+    'D_DPAD': lambda report: (report[5] >> 0) & 1,
+    'START_BUTTON': lambda report: (report[4] >> 1) & 1,
+    'Z_TRIG': lambda report: ((report[5] >> 7) & 1) or ((report[3] >> 7) & 1),
+    'B_BUTTON': lambda report: ((report[3] >> 2) & 1) or ((report[3] >> 1) & 1),
+    'A_BUTTON': lambda report: ((report[3] >> 3) & 1) or ((report[3] >> 0) & 1),
+    'R_CBUTTON': lambda report: parse_stick_data(report, left=False)[0] > 0.5,
+    'L_CBUTTON': lambda report: parse_stick_data(report, left=False)[0] < -0.5,
+    'D_CBUTTON': lambda report: parse_stick_data(report, left=False)[1] > 0.5,
+    'U_CBUTTON': lambda report: parse_stick_data(report, left=False)[1] < -0.5,
+    'R_TRIG': lambda report: (report[3] >> 6) & 1,
+    'L_TRIG': lambda report: (report[5] >> 6) & 1,
+}
+
+def parse_stick_data(report, left=True):
+    data = report[6 if left else 9:]
+    x_axis = (data[0] | ((data[1] & 0xF) << 8))
+    y_axis = ((data[1] >> 4) | (data[2] << 4))
+    x_axis = (x_axis - 1900) / 1900 if abs(x_axis - 1900) > 300 else 0  # scale and deadzone
+    y_axis = (y_axis - 1900) / 1900 if abs(y_axis - 1900) > 300 else 0
+    return x_axis, y_axis
+
+
+# Input extension for keyboard and gamepad
 
 class KeyboardInputExtension(InputExtension):
     def __init__(self, core, data_queue=None, savestate_path=None):
         super().__init__(core, data_queue, savestate_path)
         self.pressed_keys = set()
+        self.gamepad = None
 
     def init(self, window):
         super().init(window)
         glfw.set_key_callback(self.window, self.key_callback)
+
+        gamepad_device = next((device for device in hid.enumerate() if device['product_string'] == "Pro Controller"), None)
+        if gamepad_device is not None:
+            self.gamepad = hid.Device(gamepad_device['vendor_id'], gamepad_device['product_id'])
+            self.gamepad.nonblocking = True
 
     def key_callback(self, window, key, scancode, action, mods):
         if action == glfw.RELEASE:
@@ -63,16 +99,27 @@ class KeyboardInputExtension(InputExtension):
                 self.core.state_save(str(savestate_path))
 
     def get_controller_states(self):
+        report = None
+        if self.gamepad is not None:
+            report = self.gamepad.read(64)
+        if not report:
+            report = [0] * 64
+
         controller_state = M64pButtons()
-        for key, button in BUTTONS.items():
-            setattr(controller_state, button, int(key in self.pressed_keys))
-        x_axis = sum(value for key, value in AXES['X_AXIS'].items() if key in self.pressed_keys)
-        y_axis = sum(value for key, value in AXES['Y_AXIS'].items() if key in self.pressed_keys)
-        magnitude = math.sqrt(x_axis**2 + y_axis**2) + 1e-6
-        controller_state.X_AXIS = int(x_axis / magnitude * 127)
-        controller_state.Y_AXIS = int(y_axis / magnitude * 127)
+        for button in KEYBOARD_BUTTONS:
+            setattr(controller_state, button, int(KEYBOARD_BUTTONS[button] in self.pressed_keys or CONTROLLER_BUTTONS[button](report)))
+        ctl_x_axis, ctl_y_axis = parse_stick_data(report, left=True)
+        kb_x_axis = sum(value for key, value in KEYBOARD_AXES['X_AXIS'].items() if key in self.pressed_keys)
+        kb_y_axis = sum(value for key, value in KEYBOARD_AXES['Y_AXIS'].items() if key in self.pressed_keys)
+        magnitude = math.sqrt(kb_x_axis**2 + kb_y_axis**2) + 1e-6
+        x_axis = max(-1, min(1, kb_x_axis / magnitude + ctl_x_axis))
+        y_axis = max(-1, min(1, kb_y_axis / magnitude + ctl_y_axis))
+        controller_state.X_AXIS = int(x_axis * 127)
+        controller_state.Y_AXIS = int(y_axis * 127)
         return [controller_state] + [M64pButtons()] * 3
 
+
+# Encoder thread
 
 def encode(data_queue, savestate_path):
     current_time = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
@@ -118,21 +165,26 @@ def encode(data_queue, savestate_path):
         json.dump({'num_steps': frame_count}, f, indent=2)
 
 
+# Entry point
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Run Lakitu environment')
     parser.add_argument('path', type=str, help='ROM Path')
     parser.add_argument('-s', '--savestate', type=str, default=None, help='Path to save state file')
+    parser.add_argument('-r', '--record', action='store_true', default=False, help='Record the episode')
     args = parser.parse_args()
     assert Path(args.path).is_file(), f"File {args.path!r} does not exist"
 
-    # Create a queue for saving data to disk
+    # Create the encoder thread
     ctx = multiprocessing.get_context('spawn')
-    data_queue = ctx.Queue()
-    encoder_thread = ctx.Process(target=encode, args=(data_queue, args.savestate))
+    if args.record:
+        data_queue = ctx.Queue()
+        encoder_thread = ctx.Process(target=encode, args=(data_queue, args.savestate))
+        encoder_thread.start()
 
     # Load the core and plugins
     core = Core()
-    input_extension = KeyboardInputExtension(core, data_queue=data_queue, savestate_path=args.savestate)
+    input_extension = KeyboardInputExtension(core, data_queue=data_queue if args.record else None, savestate_path=args.savestate)
     video_extension = VideoExtension(input_extension)
     core.core_startup(vidext=video_extension, inputext=input_extension)
     core.load_plugins()
@@ -146,11 +198,12 @@ if __name__ == '__main__':
         core.rom_get_settings()
 
     # Run the game
-    encoder_thread.start()
     core.attach_plugins([PluginType.GFX, PluginType.AUDIO, PluginType.INPUT, PluginType.RSP])
     core.execute()
 
-    data_queue.put(None)
-    encoder_thread.join()
+    # Cleanup
+    if args.record:
+        data_queue.put(None)
+        encoder_thread.join()
     core.detach_plugins()
     core.rom_close()
