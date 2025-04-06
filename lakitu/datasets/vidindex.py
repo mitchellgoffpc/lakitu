@@ -57,7 +57,13 @@ H264_CODED_SLICE_SEGMENT_NAL_UNITS = (
 # so it seems like the only way to parse the full tree is to implement the entire spec a la https://github.com/sannies/mp4parser.
 # Fortunately the only boxes we care about are mdat for the the h.264 stream and moov/trak/mdia/minf/stbl/stsd/avc1/avcC
 # for the AVCC extradata, so we just extract these two and ignore the rest.
-def get_mp4_boxes(data):
+
+def get_mp4_boxes(input_file):
+    with open(input_file, 'rb') as f:
+        mp4_data = f.read()
+    return get_mp4_subtree(mp4_data)
+
+def get_mp4_subtree(data):
     i = 0
     boxes = {}
     while i < len(data):
@@ -66,7 +72,7 @@ def get_mp4_boxes(data):
         box_type = data[i+4:i+8].decode()
         if box_type in ('moov', 'trak', 'mdia', 'minf', 'stbl', 'stsd', 'avc1'):
             offset = {'stsd': 8, 'avc1': 78}.get(box_type, 0)  # stsd and avc1 have header data
-            boxes[box_type] = get_mp4_boxes(data[i+offset+8:i+size])
+            boxes[box_type] = get_mp4_subtree(data[i+offset+8:i+size])
         else:
             boxes[box_type] = data[i+8:i+size]
         i += size
@@ -120,11 +126,7 @@ def get_h264_slice_type(data, nal_unit_start):
     slice_type, _ = get_ue(data, rbsp_start, skip_bits=1)
     return slice_type, is_first_slice
 
-def get_h264_index(input_file):
-    with open(input_file, 'rb') as f:
-        mp4_data = f.read()
-
-    boxes = get_mp4_boxes(mp4_data)
+def get_h264_index(boxes):
     data = boxes['mdat']
     extradata = boxes['moov']['trak']['mdia']['minf']['stbl']['stsd']['avc1']['avcC']  # lol
 
@@ -141,6 +143,11 @@ def get_h264_index(input_file):
 
     return frame_types, extradata
 
+def get_decode_range(frame_types, frame_idx, num_frames):
+    start_idx = next(i for i in range(frame_idx, -1, -1) if frame_types[i][0] == H264NalUnitType.CODED_SLICE_IDR_PICTURE)
+    end_idx = next(i for i in range(frame_idx + num_frames, len(frame_types)) if frame_types[i][1] in (2, 7))
+    return start_idx, end_idx
+
 
 if __name__ == '__main__':
     import argparse
@@ -148,7 +155,8 @@ if __name__ == '__main__':
     parser.add_argument('input_file', type=str)
     args = parser.parse_args()
 
-    frame_types, extradata = get_h264_index(args.input_file)
+    boxes = get_mp4_boxes(args.input_file)
+    frame_types, extradata = get_h264_index(boxes)
     print(f"Found {len(frame_types)} frames in index, {len(extradata)} bytes of extradata")
 
     # Verify that the stream contains only only I frames and P frames

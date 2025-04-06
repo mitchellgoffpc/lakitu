@@ -1,8 +1,9 @@
 import av
 import csv
 import cv2
-import math
 import glfw
+import json
+import math
 import shutil
 import argparse
 import datetime
@@ -87,7 +88,7 @@ def encode(data_queue, savestate_path):
     stream.width = width
     stream.height = height
     stream.pix_fmt = 'yuv420p'  # Common pixel format for H.264
-    stream.options = {
+    stream.codec_context.options = {
         'crf': '23',
         'g': '30',
     }
@@ -112,6 +113,9 @@ def encode(data_queue, savestate_path):
     packet = stream.encode(None)
     container.mux(packet)
     container.close()
+
+    with open(result_path / 'info.json', 'w') as f:
+        json.dump({'num_steps': frame_count}, f, indent=2)
 
 
 if __name__ == '__main__':
