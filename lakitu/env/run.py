@@ -8,6 +8,7 @@ import math
 import shutil
 import argparse
 import datetime
+import threading
 import multiprocessing
 from pathlib import Path
 
@@ -69,16 +70,25 @@ class KeyboardInputExtension(InputExtension):
     def __init__(self, core, data_queue=None, savestate_path=None):
         super().__init__(core, data_queue, savestate_path)
         self.pressed_keys = set()
-        self.gamepad = None
+        self.gamepad_report = [0] * 64
+        self.gamepad_report[6:9] = [0b01101100, 0b11000111, 0b01110110]
+        self.gamepad_report[9:12] = [0b01101100, 0b11000111, 0b01110110]
+        self.gamepad_thread = threading.Thread(target=self.read_gamepad_data, args=(), daemon=True)
+        self.gamepad_thread.start()
 
     def init(self, window):
         super().init(window)
         glfw.set_key_callback(self.window, self.key_callback)
 
+    def read_gamepad_data(self):
         gamepad_device = next((device for device in hid.enumerate() if device['product_string'] == "Pro Controller"), None)
-        if gamepad_device is not None:
-            self.gamepad = hid.Device(gamepad_device['vendor_id'], gamepad_device['product_id'])
-            self.gamepad.nonblocking = True
+        if gamepad_device is None:
+            return
+        gamepad = hid.Device(gamepad_device['vendor_id'], gamepad_device['product_id'])
+        gamepad.nonblocking = True
+        while True:
+            if (report := gamepad.read(64)):
+                self.gamepad_report = report
 
     def key_callback(self, window, key, scancode, action, mods):
         if action == glfw.RELEASE:
@@ -99,16 +109,11 @@ class KeyboardInputExtension(InputExtension):
                 self.core.state_save(str(savestate_path))
 
     def get_controller_states(self):
-        report = None
-        if self.gamepad is not None:
-            report = self.gamepad.read(64)
-        if not report:
-            report = [0] * 64
-
         controller_state = M64pButtons()
         for button in KEYBOARD_BUTTONS:
-            setattr(controller_state, button, int(KEYBOARD_BUTTONS[button] in self.pressed_keys or CONTROLLER_BUTTONS[button](report)))
-        ctl_x_axis, ctl_y_axis = parse_stick_data(report, left=True)
+            pressed = KEYBOARD_BUTTONS[button] in self.pressed_keys or CONTROLLER_BUTTONS[button](self.gamepad_report)
+            setattr(controller_state, button, int(pressed))
+        ctl_x_axis, ctl_y_axis = parse_stick_data(self.gamepad_report, left=True)
         kb_x_axis = sum(value for key, value in KEYBOARD_AXES['X_AXIS'].items() if key in self.pressed_keys)
         kb_y_axis = sum(value for key, value in KEYBOARD_AXES['Y_AXIS'].items() if key in self.pressed_keys)
         magnitude = math.sqrt(kb_x_axis**2 + kb_y_axis**2) + 1e-6
