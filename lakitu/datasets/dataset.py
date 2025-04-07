@@ -8,7 +8,7 @@ from torch.utils.data import Dataset
 from lakitu.datasets.vidindex import get_h264_index, get_mp4_boxes, get_decode_range
 
 class RolloutDataset(Dataset):
-    def __init__(self, data_dir="lakitu/data/rollouts", frames_per_sample=1, transform=None):
+    def __init__(self, data_dir="lakitu/data/rollouts", frames_per_sample=1, rollout_ids=None, transform=None):
         self.data_dir = Path(data_dir)
         self.frames_per_sample = frames_per_sample
         self.transform = transform
@@ -18,6 +18,8 @@ class RolloutDataset(Dataset):
 
         # Create rollout index
         for rollout_idx, rollout_dir in enumerate(sorted(self.data_dir.iterdir())):
+            if rollout_ids is not None and rollout_dir.name not in rollout_ids:
+                continue
             info_path = rollout_dir / "info.json"
             video_path = rollout_dir / "observations.mp4"
             actions_path = rollout_dir / "actions.csv"
@@ -116,7 +118,7 @@ if __name__ == "__main__":
     elif args.mode == 'visualize':
         import pygame
         pygame.init()
-        screen = pygame.display.set_mode((256, 224))
+        screen = pygame.display.set_mode((320, 240))
         clock = pygame.time.Clock()
 
         running = True

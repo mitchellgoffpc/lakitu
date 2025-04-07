@@ -145,7 +145,7 @@ def get_h264_index(boxes):
 
 def get_decode_range(frame_types, frame_idx, num_frames):
     start_idx = next(i for i in range(frame_idx, -1, -1) if frame_types[i][0] == H264NalUnitType.CODED_SLICE_IDR_PICTURE)
-    end_idx = next(i for i in range(frame_idx + num_frames, len(frame_types)) if frame_types[i][1] in (2, 7))
+    end_idx = next((i for i in range(frame_idx + num_frames, len(frame_types)) if frame_types[i][1] in (2, 7)), len(frame_types))
     return start_idx, end_idx
 
 
