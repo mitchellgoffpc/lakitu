@@ -3,9 +3,9 @@ import csv
 import unittest
 import numpy as np
 from pathlib import Path
-from lakitu.datasets.dataset import RolloutDataset
+from lakitu.datasets.dataset import EpisodeDataset
 
-class TestRolloutDataset(unittest.TestCase):
+class TestEpisodeDataset(unittest.TestCase):
     def setUp(self):
         self.data_dir = Path(__file__).parent.parent / "lakitu/data/rollouts"
         self.assertTrue(self.data_dir.exists(), f"Data directory {self.data_dir} does not exist")
@@ -27,13 +27,13 @@ class TestRolloutDataset(unittest.TestCase):
 
     def test_dataset_length(self):
         """Test that the dataset length is correct."""
-        dataset = RolloutDataset(data_dir=self.data_dir, frames_per_sample=4, rollout_ids=[self.rollout_dir.name])
-        expected_length = len(self.frames) - dataset.frames_per_sample + 1
+        dataset = EpisodeDataset(data_dir=self.data_dir, deltas={'observation.image': [0]})
+        expected_length = len(self.frames)
         self.assertEqual(len(dataset), expected_length, f"Dataset length {len(dataset)} doesn't match expected {expected_length}")
 
     def test_single_frame_retrieval(self):
         """Test retrieving single frame samples."""
-        single_frame_dataset = RolloutDataset(data_dir=self.data_dir, frames_per_sample=1, rollout_ids=[self.rollout_dir.name])
+        single_frame_dataset = EpisodeDataset(data_dir=self.data_dir, deltas={'observation.image': [0]})
 
         for idx in range(0, len(self.frames) - 1, 23):
             frames, actions = single_frame_dataset[idx]
@@ -49,14 +49,15 @@ class TestRolloutDataset(unittest.TestCase):
 
     def test_multi_frame_retrieval(self):
         """Test retrieving multi-frame samples."""
-        dataset = RolloutDataset(data_dir=self.data_dir, frames_per_sample=4, rollout_ids=[self.rollout_dir.name])
+        frames_per_sample = 4
+        dataset = EpisodeDataset(data_dir=self.data_dir, deltas={'observation.image': list(range(frames_per_sample))})
 
-        for idx in range(0, min(len(dataset), len(self.frames) - dataset.frames_per_sample + 1), 23):
+        for idx in range(0, min(len(dataset), len(self.frames) - frames_per_sample + 1), 23):
             frames, actions = dataset[idx]
-            self.assertEqual(frames.shape, (dataset.frames_per_sample, 3, 240, 320), f"Frames shape mismatch at index {idx}")
-            self.assertEqual(actions.shape, (dataset.frames_per_sample, len(self.actions[0])), f"Actions shape mismatch at index {idx}")
+            self.assertEqual(frames.shape, (frames_per_sample, 3, 240, 320), f"Frames shape mismatch at index {idx}")
+            self.assertEqual(actions.shape, (frames_per_sample, len(self.actions[0])), f"Actions shape mismatch at index {idx}")
 
-            for i in range(dataset.frames_per_sample):
+            for i in range(frames_per_sample):
                 frame_np = (frames[i].permute(1, 2, 0).numpy() * 255.0).astype(np.uint8)
                 frame_diff = np.abs(frame_np.astype(float) - self.frames[idx + i].astype(float)).mean()
                 self.assertLess(frame_diff, 1.0, f"Frame content mismatch at index {idx+i}")

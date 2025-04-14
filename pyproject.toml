@@ -7,7 +7,7 @@ name = "lakitu"
 version = "0.1.0"
 description = "A gymnasium environment for Nintendo 64"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     {name = "Mitchell", email = "mitchellgoffpc@gmail.com"}
 ]
@@ -17,6 +17,9 @@ dependencies = [
     "numpy",
     "av",
     "pyarrow",
+    "torch",
+    "torchvision",
+    "einops",
 ]
 
 [project.optional-dependencies]
@@ -29,7 +32,7 @@ dev = [
 
 [tool.ruff]
 line-length = 140
-target-version = "py38"
+target-version = "py310"
 exclude = ["lakitu/env/lib/"]
 
 [tool.ruff.lint]
@@ -37,7 +40,7 @@ select = ["E", "F", "I", "N", "W", "B"]
 ignore = ["I001", "N812", "N813"]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 disallow_incomplete_defs = true
@@ -51,5 +54,5 @@ cache_dir = "/dev/null"
 exclude = ["^lakitu/env/lib"]
 
 [[tool.mypy.overrides]]
-module = "glfw,hid"
+module = "glfw,hid,torchvision"
 ignore_missing_imports = true
