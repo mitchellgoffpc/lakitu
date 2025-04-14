@@ -98,7 +98,7 @@ class EpisodeDataset(Dataset):
         end_pad_len = max(0, (frame_idx + frame_deltas[-1] + 1) - end_idx)
         padded_frames = [frames[0]] * start_pad_len + frames + [frames[-1]] * end_pad_len
         batch[OBSERVATION_KEY] = np.stack(padded_frames).transpose(0, 3, 1, 2).astype(np.float32) / 255.0
-        batch[f'{OBSERVATION_KEY}.padded'] = np.array([1] * start_pad_len + [0] * len(frames) + [1] * end_pad_len)
+        batch[f'{OBSERVATION_KEY}.padded'] = np.array([1] * start_pad_len + [0] * len(frames) + [1] * end_pad_len, dtype=bool)
 
         expected_num_frames = frame_deltas[-1] - frame_deltas[0] + 1
         assert len(padded_frames) == expected_num_frames, \
@@ -116,7 +116,7 @@ class EpisodeDataset(Dataset):
             end_pad_len = max(0, (frame_idx + deltas[-1] + 1) - end_idx)
             padded_data = [data[0]] * start_pad_len + data + [data[-1]] * end_pad_len
             batch[key] = np.array(padded_data, dtype=np.float32)
-            batch[f'{key}.padded'] = np.array([1] * start_pad_len + [0] * len(data) + [1] * end_pad_len)
+            batch[f'{key}.padded'] = np.array([1] * start_pad_len + [0] * len(data) + [1] * end_pad_len, dtype=bool)
 
             expected_num_rows = deltas[-1] - deltas[0] + 1
             assert len(padded_data) == expected_num_rows, \
