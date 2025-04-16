@@ -16,6 +16,7 @@
 
 import os
 import sys
+import struct
 import binascii
 import ctypes as C
 import logging as log
@@ -54,6 +55,13 @@ PLUGIN_PATHS = {
     PluginType.INPUT: "mupen64plus-input-ext%s" % DLL_EXT
 }
 
+SKIP_MESSAGES = [
+    ('Core', 'init block'),  # debugger messages
+    ('Core', 'block recompiled'),
+    ('Core', 'NOTCOMPILED'),
+    ('Audio', 'sdl_push_samples:'),  # audio skipping bytes
+]
+
 def version_split(ver):
     return "%d.%d.%d" % (
         ((ver >> 16) & 0xffff),
@@ -61,6 +69,8 @@ def version_split(ver):
         (ver & 0xff))
 
 def debug_callback(context, level, message):
+    if any(context.decode() == ctx and message.decode().startswith(msg) for ctx, msg in SKIP_MESSAGES):
+        return
     if level <= LogLevel.ERROR:
         sys.stderr.write("%s: %s\n" % (context.decode(), message.decode()))
     elif level <= LogLevel.WARNING:
@@ -382,6 +392,13 @@ class Core:
             log.debug("core_state_set()")
             log.warn(self.error_message(rval))
         return value_ptr.contents.value
+
+    def core_mem_read(self, address, size):
+        dwords = []
+        for _ in range(0, size, 4):
+            rval = self.m64p.DebugMemRead32(C.c_uint(address))
+            dwords.append(struct.pack(">I", rval))  # n64 is big endian
+        return b''.join(dwords)[:size]
 
     def state_load(self, state_path=None):
         """Loads a saved state file from the current slot."""
