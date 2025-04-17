@@ -152,7 +152,7 @@ def encode(data_queue, savestate_path):
 
         frame_count = 0
         while (data := data_queue.get()) is not None:
-            frame, controller_states = data
+            frame, controller_states, info = data
             frame = cv2.resize(frame[::-1], (width, height))
             av_frame = av.VideoFrame.from_ndarray(frame, format='rgb24')
             packet = stream.encode(av_frame)

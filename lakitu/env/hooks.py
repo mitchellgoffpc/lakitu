@@ -266,11 +266,12 @@ class VideoExtension:
 
 
 class InputExtension:
-    def __init__(self, core, data_queue=None, savestate_path=None):
+    def __init__(self, core, data_queue=None, savestate_path=None, info_hooks=None):
         self.window = None
         self.core = core
         self.data_queue = data_queue
         self.savestate_path = savestate_path
+        self.info_hooks = info_hooks
         self.controller_states = None
 
         # Input extension struct
@@ -302,6 +303,9 @@ class InputExtension:
     def get_controller_states(self):
         raise NotImplementedError("get_controller_states() must be implemented in a subclass")
 
+    def get_info(self):
+        return {name: hook(self.core) for name, hook in (self.info_hooks or {}).items()}
+
     def render_callback(self):
         if not self.window:
             return
@@ -314,7 +318,7 @@ class InputExtension:
             width, height = glfw.get_window_size(self.window)
             buffer = np.zeros((height, width, 3), dtype=np.uint8)
             self.gfx.ReadScreen2(buffer.ctypes.data_as(C.POINTER(C.c_uint8)), C.byref(C.c_int(width)), C.byref(C.c_int(height)), 0)
-            self.data_queue.put((buffer, self.controller_states))
+            self.data_queue.put((buffer, self.controller_states, self.get_info()))
 
         self.savestate_path = None
         self.controller_states = None

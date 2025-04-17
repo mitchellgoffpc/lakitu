@@ -23,8 +23,8 @@ BUTTON_NAMES = [
 class RemoteInputExtension(InputExtension):
     """Input plugin that receives controller states from a queue"""
 
-    def __init__(self, core, input_queue, data_queue, savestate_path=None):
-        super().__init__(core, data_queue, savestate_path)
+    def __init__(self, core, input_queue, data_queue, savestate_path=None, info_hooks=None):
+        super().__init__(core, data_queue, savestate_path, info_hooks)
         self.input_queue = input_queue
 
     def get_controller_states(self):
@@ -40,11 +40,11 @@ class RemoteInputExtension(InputExtension):
         return controller_states
 
 
-def emulator_process(rom_path, savestate_path, input_queue, data_queue):
+def emulator_process(rom_path, savestate_path, input_queue, data_queue, info_hooks):
     """Process that runs the emulator"""
     # Load the core and plugins
     core = Core()
-    input_extension = RemoteInputExtension(core, input_queue, data_queue, savestate_path)
+    input_extension = RemoteInputExtension(core, input_queue, data_queue, savestate_path, info_hooks)
     video_extension = VideoExtension(input_extension, offscreen=True)
     core.core_startup(vidext=video_extension, inputext=input_extension)
     core.load_plugins()
@@ -69,11 +69,12 @@ class N64Env(gym.Env):
     """Gymnasium environment for N64"""
     metadata = {"render_modes": ["rgb_array"], "render_fps": 30}
 
-    def __init__(self, rom_path, savestate_path=None, render_mode=None):
+    def __init__(self, rom_path, savestate_path=None, render_mode=None, info_hooks=None):
         super().__init__()
         self.rom_path = rom_path
         self.savestate_path = savestate_path
         self.render_mode = render_mode
+        self.info_hooks = info_hooks
         self.emulator_proc = None
         self.current_frame = None
 
@@ -96,7 +97,7 @@ class N64Env(gym.Env):
 
         self.emulator_proc = self.ctx.Process(
             target=emulator_process,
-            args=(self.rom_path, self.savestate_path, self.input_queue, self.data_queue),
+            args=(self.rom_path, self.savestate_path, self.input_queue, self.data_queue, self.info_hooks),
             daemon=True
         )
         self.emulator_proc.start()
@@ -135,13 +136,12 @@ class N64Env(gym.Env):
             setattr(controller_state, button_name, int(action['buttons'][i]))
 
         self.input_queue.put([controller_state])
-        frame, controller_states = self.data_queue.get()
+        frame, controller_states, info = self.data_queue.get()
 
         observation = frame[::-1]  # Flip vertically
         terminated = False
         truncated = False
         reward = 0.0
-        info: dict = {}
 
         self.current_frame = observation
         return observation, reward, terminated, truncated, info
@@ -168,6 +168,12 @@ class N64Env(gym.Env):
 
 
 # Example usage
+def get_level(core):
+    import struct
+    mem = core.core_mem_read(0x8032DDF8, 2)
+    level = struct.unpack('>H', mem)[0]  # n64 is big endian
+    return level
+
 if __name__ == "__main__":
     import argparse
     import pygame
@@ -182,7 +188,7 @@ if __name__ == "__main__":
     pygame.display.set_caption('N64')
     clock = pygame.time.Clock()
 
-    env = N64Env(args.rom_path, args.savestate, render_mode="rgb_array")
+    env = N64Env(args.rom_path, args.savestate, info_hooks={'level': get_level}, render_mode="rgb_array")
     observation, info = env.reset()
 
     running = True
