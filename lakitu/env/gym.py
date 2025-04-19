@@ -12,14 +12,6 @@ PLUGINS_PATH = LIBRARY_PATH / 'mupen64plus'
 CONFIG_PATH = Path(__file__).parent / 'lib'
 DATA_PATH = Path('/usr/local/share/mupen64plus')
 
-# Button mapping (same order as in the action space)
-BUTTON_NAMES = [
-    'A_BUTTON', 'B_BUTTON', 'Z_TRIG', 'START_BUTTON',
-    'U_DPAD', 'D_DPAD', 'L_DPAD', 'R_DPAD',
-    'U_CBUTTON', 'D_CBUTTON', 'L_CBUTTON', 'R_CBUTTON',
-    'L_TRIG', 'R_TRIG'
-]
-
 class RemoteInputExtension(InputExtension):
     """Input plugin that receives controller states from a queue"""
 
@@ -133,7 +125,7 @@ class N64Env(gym.Env):
         controller_state = M64pButtons()
         controller_state.X_AXIS = int(joystick[0] * 127)
         controller_state.Y_AXIS = int(joystick[1] * 127)
-        for i, button_name in enumerate(BUTTON_NAMES):
+        for i, button_name in enumerate(M64pButtons.get_button_fields()):
             setattr(controller_state, button_name, int(action['buttons'][i]))
 
         self.input_queue.put([controller_state])

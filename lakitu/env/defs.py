@@ -232,6 +232,14 @@ class M64pButtons(C.Structure):
         ('Y_AXIS', C.c_int8),
     ]
 
+    @classmethod
+    def get_joystick_fields(cls):
+        return ['X_AXIS', 'Y_AXIS']
+
+    @classmethod
+    def get_button_fields(cls):
+        return [field for field, *_ in cls._fields_ if field not in cls.get_joystick_fields() and not field.startswith('Reserved')]
+
 class M64pControl(C.Structure):
     _fields_ = [
         ('Present', C.c_int),
