@@ -36,21 +36,24 @@ class DiffusionConfig:
     device: str = "cuda"
     use_amp: bool = False
 
-    input_features: dict[str, PolicyFeature] = field(default_factory=dict)
-    output_features: dict[str, PolicyFeature] = field(default_factory=dict)
-
     # Inputs / output structure.
     n_obs_steps: int = 2
     horizon: int = 16
     n_action_steps: int = 8
 
-    normalization_mapping: dict[str, NormalizationMode] = field(
-        default_factory=lambda: {
-            "VISUAL": NormalizationMode.MEAN_STD,
-            "STATE": NormalizationMode.MIN_MAX,
-            "ACTION": NormalizationMode.MIN_MAX,
-        }
-    )
+    input_features: dict[str, PolicyFeature] = field(default_factory=lambda: {
+       "observation.image": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 240, 320)),
+    })
+    output_features: dict[str, PolicyFeature] = field(default_factory=lambda: {
+        "action.buttons": PolicyFeature(type=FeatureType.ACTION, shape=(14,)),
+        "action.joystick": PolicyFeature(type=FeatureType.ACTION, shape=(2,)),
+    })
+
+    normalization_mapping: dict[str, NormalizationMode] = field(default_factory=lambda: {
+        "VISUAL": NormalizationMode.MEAN_STD,
+        "STATE": NormalizationMode.MIN_MAX,
+        "ACTION": NormalizationMode.MIN_MAX,
+    })
 
     # The original implementation doesn't sample frames for the last 7 steps,
     # which avoids excessive padding and leads to improved training results.
@@ -96,16 +99,20 @@ class DiffusionConfig:
     scheduler_warmup_steps: int = 500
 
     @property
-    def state_feature(self) -> PolicyFeature:
-        return next(ft for ft in self.input_features.values() if ft.type is FeatureType.STATE)
-
-    @property
-    def action_feature(self) -> PolicyFeature:
-        return next(ft for ft in self.output_features.values() if ft.type is FeatureType.ACTION)
+    def state_features(self) -> dict[str, PolicyFeature]:
+        return {key: ft for key, ft in self.input_features.items() if ft.type is FeatureType.STATE}
 
     @property
     def image_features(self) -> dict[str, PolicyFeature]:
         return {key: ft for key, ft in self.input_features.items() if ft.type is FeatureType.VISUAL}
+
+    @property
+    def action_features(self) -> dict[str, PolicyFeature]:
+        return {key: ft for key, ft in self.output_features.items() if ft.type is FeatureType.ACTION}
+
+    @property
+    def action_size(self) -> int:
+        return sum(ft.shape[0] for ft in self.action_features.values())
 
     @property
     def observation_delta_indices(self) -> list:
@@ -145,7 +152,7 @@ class DiffusionPolicy(nn.Module):
         self.unnormalize_outputs = Unnormalize(config.output_features, config.normalization_mapping, dataset_stats)
 
         # Build observation encoders (depending on which observations are provided).
-        global_cond_dim = self.config.state_feature.shape[0]
+        global_cond_dim = sum(feat.shape[0] for feat in self.config.state_features.values())
         if self.config.image_features:
             self.rgb_encoder = DiffusionRgbEncoder(config)
             global_cond_dim += self.rgb_encoder.feature_dim * len(self.config.image_features)
@@ -168,18 +175,14 @@ class DiffusionPolicy(nn.Module):
     # Inference methods
 
     def reset(self) -> None:
-        self._queues: dict[str, deque[Tensor]] = {
-            "observation.state": deque(maxlen=self.config.n_obs_steps),
-            "action": deque(maxlen=self.config.n_action_steps),
-        }
-        if self.config.image_features:
-            self._queues["observation.images"] = deque(maxlen=self.config.n_obs_steps)
+        self._queues: dict[str, deque[Tensor]] = {}
+        self._queues.update({key: deque(maxlen=self.config.n_obs_steps) for key in self.config.state_features | self.config.image_features})
+        self._queues.update({key: deque(maxlen=self.config.n_action_steps) for key in self.config.action_features})
 
     @torch.no_grad()
-    def select_action(self, batch: dict[str, Tensor]) -> Tensor:
+    def select_action(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
         batch = self.normalize_inputs(batch)
-        if self.config.image_features:
-            batch = batch | {"observation.images": torch.cat([batch[key] for key in self.config.image_features], dim=1)}
+        action_key = next(iter(self.config.action_features.keys()))
 
         for key in batch:
             if key in self._queues:
@@ -187,18 +190,18 @@ class DiffusionPolicy(nn.Module):
                     self._queues[key].append(batch[key])  # initialize by copying the first observation several times until queue is full
                 self._queues[key].append(batch[key])  # add latest observation to the queue
 
-        if len(self._queues["action"]) == 0:
+        if len(self._queues[action_key]) == 0:
             # stack n latest observations from the queue
             batch = {k: torch.stack(list(self._queues[k]), dim=1) for k in batch if k in self._queues}
             actions = self.generate_actions(batch)
-            actions = self.unnormalize_outputs({"action": actions})["action"]
-            self._queues["action"].extend(actions.transpose(0, 1))
+            actions = self.unnormalize_outputs(actions)
+            for key, action in actions.items():
+                self._queues[key].extend(action.transpose(0, 1))
 
-        action = self._queues["action"].popleft()
-        return action
+        return {key: self._queues[key].popleft() for key in self.config.action_features}
 
-    def generate_actions(self, batch: dict[str, Tensor]) -> Tensor:
-        batch_size, n_obs_steps = batch["observation.state"].shape[:2]
+    def generate_actions(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
+        batch_size, n_obs_steps = batch["observation.image"].shape[:2]
         assert n_obs_steps == self.config.n_obs_steps
 
         global_cond = self._prepare_global_conditioning(batch)  # encode image features and concatenate with state vector
@@ -207,11 +210,15 @@ class DiffusionPolicy(nn.Module):
         # Extract `n_action_steps` steps worth of actions (from the current observation).
         start = n_obs_steps - 1
         end = start + self.config.n_action_steps
-        return actions[:, start:end]
+        actions = actions[:, start:end]
+
+        # Split actions into subcomponents according to action_features
+        split_sizes = [ft.shape[0] for ft in self.config.action_features.values()]
+        return dict(zip(self.config.action_features.keys(), torch.split(actions, split_sizes, dim=-1), strict=True))
 
     def conditional_sample(self, batch_size: int, global_cond: Tensor) -> Tensor:
         device = torch.device(self.config.device)
-        sample = torch.randn(size=(batch_size, self.config.horizon, self.config.action_feature.shape[0]), device=device)
+        sample = torch.randn(size=(batch_size, self.config.horizon, self.config.action_size), device=device)
         self.noise_scheduler.set_timesteps(self.config.num_inference_steps or self.config.num_train_timesteps)
 
         for t in self.noise_scheduler.timesteps:
@@ -225,19 +232,15 @@ class DiffusionPolicy(nn.Module):
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict[str, Tensor]]:
         batch = self.normalize_inputs(batch)
-        if self.config.image_features:
-            batch = batch | {"observation.images": torch.cat([batch[key] for key in self.config.image_features], dim=1)}
         batch = self.normalize_targets(batch)
         loss, output_dict = self.compute_loss(batch)
         return loss, output_dict
 
-
     def compute_loss(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict[str, Tensor]]:
         # Input validation.
-        assert set(batch).issuperset({"observation.state", "action", "action_is_pad"})
-        assert "observation.images" in batch
-        n_obs_steps = batch["observation.state"].shape[1]
-        horizon = batch["action"].shape[1]
+        assert set(batch).issuperset({"observation.image", "action.joystick", "action.buttons"})
+        n_obs_steps = batch["observation.image"].shape[1]
+        horizon = batch["action.joystick"].shape[1]
         assert horizon == self.config.horizon
         assert n_obs_steps == self.config.n_obs_steps
 
@@ -245,7 +248,7 @@ class DiffusionPolicy(nn.Module):
         global_cond = self._prepare_global_conditioning(batch)  # (B, global_cond_dim)
 
         # Forward diffusion
-        trajectory = batch["action"]
+        trajectory = torch.cat([batch[key] for key in self.config.action_features], dim=-1)
         eps = torch.randn(trajectory.shape, device=trajectory.device)  # sample noise
         timesteps = torch.randint(0, self.noise_scheduler.config.num_train_timesteps, size=(trajectory.shape[0],), device=trajectory.device)
         noisy_trajectory = self.noise_scheduler.add_noise(trajectory, eps, timesteps)
@@ -258,7 +261,7 @@ class DiffusionPolicy(nn.Module):
         if self.config.prediction_type == "epsilon":
             target = eps
         elif self.config.prediction_type == "sample":
-            target = batch["action"]
+            target = trajectory
         else:
             raise ValueError(f"Unsupported prediction type {self.config.prediction_type}")
 
@@ -274,10 +277,12 @@ class DiffusionPolicy(nn.Module):
         return loss.mean(), {'pred': pred}
 
     def _prepare_global_conditioning(self, batch: dict[str, Tensor]) -> Tensor:
-        batch_size, n_obs_steps = batch["observation.state"].shape[:2]
-        global_cond_feats = [batch["observation.state"]]
+        image_feature = next(iter(self.config.image_features.keys()))
+        batch_size, n_obs_steps = batch[image_feature].shape[:2]
+        global_cond_feats = [batch[key] for key in self.config.state_features]
         if self.config.image_features:
-            img_features = self.rgb_encoder(einops.rearrange(batch["observation.images"], "b s ... -> (b s) ..."))
+            images = torch.cat([batch[key] for key in self.config.image_features], dim=2)
+            img_features = self.rgb_encoder(einops.rearrange(images, "b s ... -> (b s) ..."))
             img_features = einops.rearrange(img_features, "(b s) ... -> b s (...)", b=batch_size, s=n_obs_steps)
             global_cond_feats.append(img_features)
 
@@ -349,7 +354,7 @@ class DiffusionConditionalUnet1d(nn.Module):
         cond_dim = config.diffusion_step_embed_dim + global_cond_dim
 
         # In channels / out channels for each downsampling block in the Unet's encoder. For the decoder, we just reverse these.
-        in_out = [(config.action_feature.shape[0], config.down_dims[0])] + \
+        in_out = [(config.action_size, config.down_dims[0])] + \
             list(zip(config.down_dims[:-1], config.down_dims[1:], strict=True))
 
         # Unet encoder
@@ -385,7 +390,7 @@ class DiffusionConditionalUnet1d(nn.Module):
 
         self.final_conv = nn.Sequential(
             DiffusionConv1dBlock(config.down_dims[0], config.down_dims[0], kernel_size=config.kernel_size),
-            nn.Conv1d(config.down_dims[0], config.action_feature.shape[0], 1),
+            nn.Conv1d(config.down_dims[0], config.action_size, 1),
         )
 
     def forward(self, x: Tensor, timestep: Tensor, global_cond: Tensor) -> Tensor:
@@ -500,8 +505,8 @@ def create_stats_buffers(
         buffer = {}
         if norm_mode is NormalizationMode.MEAN_STD:
             buffer = {
-                "mean": torch.tensor(stats[key]["mean"]).float() if stats else torch.full(shape, torch.nan),
-                "std": torch.tensor(stats[key]["std"]).float() if stats else torch.full(shape, torch.nan),
+                "mean": torch.as_tensor(stats[key]["mean"]).float() if stats else torch.full(shape, torch.nan),
+                "std": torch.as_tensor(stats[key]["std"]).float() if stats else torch.full(shape, torch.nan),
             }
         elif norm_mode is NormalizationMode.MIN_MAX:
             buffer = {
@@ -533,6 +538,7 @@ class Normalize(nn.Module):
             elif norm_mode is NormalizationMode.MIN_MAX:
                 batch[key] = (batch[key] - buffer["min"]) / (buffer["max"] - buffer["min"] + 1e-8)
                 batch[key] = batch[key] * 2 - 1  # normalize to [-1, 1]
+            assert torch.all(torch.isfinite(batch[key])), f"Stats are not initialized for key {key}"
 
         return batch
 
@@ -556,23 +562,33 @@ class Unnormalize(nn.Module):
             elif norm_mode is NormalizationMode.MIN_MAX:
                 batch[key] = (batch[key] + 1) / 2
                 batch[key] = batch[key] * (buffer["max"] - buffer["min"]) + buffer["min"]
+            assert torch.all(torch.isfinite(batch[key])), f"Stats are not initialized for key {key}"
 
         return batch
 
 
 if __name__ == "__main__":
-    config = DiffusionConfig()
-    model = DiffusionPolicy(config)
-    device = torch.device(model.config.device)
+    stats = {
+        "observation.image": {"mean": torch.tensor([0.5, 0.5, 0.5])[:, None, None], "std": torch.tensor([0.5, 0.5, 0.5])[:, None, None]},
+        "action.joystick": {"min": torch.tensor([-1, -1]), "max": torch.tensor([1, 1])},
+        "action.buttons": {"min": torch.tensor([0] * 14), "max": torch.tensor([1] * 14)},
+    }
+
+    config = DiffusionConfig(device="cpu")
+    model = DiffusionPolicy(config, stats)
+    device = torch.device(config.device)
 
     # Create dummy batch
     batch = {
-        "observation.image": torch.randn(2, 2, 3, 96, 96).to(device),
-        "observation.state": torch.randn(2, 2, 2).to(device),
-        "action": torch.randn(2, 16, 2).to(device),
-        "action_is_pad": torch.zeros(2, 16, dtype=torch.bool).to(device),
+        "observation.image": torch.randn(2, 2, 3, 240, 320).to(device),
+        "action.joystick": torch.randn(2, 16, 2).to(device),
+        "action.buttons": torch.randn(2, 16, 14).to(device),
     }
 
     # Forward pass
     loss, _ = model.forward(batch)
     print(f"Loss: {loss.item()}")
+
+    # Generate actions
+    model.select_action({k: v[:, -1] for k, v in batch.items() if not k.startswith("action.")})
+    print("Done")
