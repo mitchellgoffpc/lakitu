@@ -1,8 +1,8 @@
 import av
+import json
 import torch
+import struct
 import numpy as np
-import pyarrow.parquet as pq
-from pyarrow import Table
 from pathlib import Path
 from dataclasses import dataclass
 from torch.utils.data import Dataset
@@ -10,11 +10,36 @@ from torch.utils.data import Dataset
 from lakitu.datasets.vidindex import CodecType, get_frame_info, get_mp4_boxes, get_decode_range
 
 DEFAULT_DATA_DIR = Path(__file__).parent.parent / 'data' / 'episodes'
-OBSERVATION_KEY = 'observation'
+VIDEO_KEY = 'observation.image'
+
+
+# Normally we'd use parquet or .npy files for our tabular data, but since we'll be streaming the data to disk
+# as we record, it's convenient to use a format that's more append-friendly. The format we use is similar in nature
+# to the .npy or .safetensors formats, with a few small modifications. Its binary representation is as follows:
+# - 4 bytes: N, the length of the header
+# - N bytes: A JSON UTF-8 string representing the header. The header will be a JSON array of objects, each with the following fields:
+#   - name: The name of the field
+#   - dtype: The data type of the field, consumable by np.dtype() (e.g. 'float32', 'int32', etc.)
+#   - shape: The shape of the field. This will be a JSON array of integers, or an empty array if the field is scalar. It excludes the
+#            first dimension, which will be inferred from the data. This allows us to append rows without modifying the header.
+# - Rest of file: Byte buffer
+
+def load_episode_data(data_file):
+    with open(data_file, 'rb') as f:
+        header_length = struct.unpack('<I', f.read(4))[0]
+        fields = json.loads(f.read(header_length).decode('utf-8'))
+        buffer = f.read()
+        row_size = sum(np.dtype(field['dtype']).itemsize * (np.prod(field['shape']) if field['shape'] else 1) for field in fields)
+        assert len(buffer) % row_size == 0, f"Data size {len(buffer)} is not a multiple of row size {row_size}"
+        return np.frombuffer(buffer, dtype=[(field['name'], np.dtype(field['dtype']), tuple(field['shape'])) for field in fields])
+
+
+# Episode Dataset
 
 @dataclass
 class EpisodeData:
-    data: Table
+    name: str
+    data: np.ndarray
     codec: CodecType
     frame_info: list[tuple[int, int, bool, int]]
     extradata: bytes
@@ -27,22 +52,21 @@ class EpisodeDataset(Dataset):
         self.deltas = deltas or {}
         self.episodes = {}
         self.episodes_by_idx: list[str] = []
-        assert OBSERVATION_KEY in self.deltas, f"deltas must contain key {OBSERVATION_KEY!r}"
 
         for episode_dir in sorted(self.data_dir.iterdir()):
             episode_name = episode_dir.name
-            parquet_file = episode_dir / "episode.parquet"
+            data_file = episode_dir / "episode.data"
             video_file = episode_dir / "episode.mp4"
-            assert parquet_file.exists(), f"Missing {parquet_file}"
+            assert data_file.exists(), f"Missing {data_file}"
             assert video_file.exists(), f"Missing {video_file}"
 
-            data = pq.read_table(parquet_file)
+            data = load_episode_data(data_file)
             boxes = get_mp4_boxes(video_file)
             codec_type, frame_info, extradata = get_frame_info(boxes)
             start_idx = len(self.episodes_by_idx)
             end_idx = start_idx + len(data)
             assert len(frame_info) == len(data), f"Mismatch between video and data length for {video_file.name}"
-            self.episodes[episode_name] = EpisodeData(data, codec_type, frame_info, extradata, start_idx, end_idx)
+            self.episodes[episode_name] = EpisodeData(episode_name, data, codec_type, frame_info, extradata, start_idx, end_idx)
             self.episodes_by_idx.extend([episode_name] * len(data))
 
         codecs = set(ep.codec for ep in self.episodes.values())
@@ -56,8 +80,32 @@ class EpisodeDataset(Dataset):
         episode_name = self.episodes_by_idx[idx]
         episode = self.episodes[episode_name]
         frame_idx = idx - episode.start_idx
-        batch = {}
 
+        batch = {}
+        for key, deltas in self.deltas.items():
+            if key == VIDEO_KEY:
+                data, start_idx = self.get_frame_data(episode, frame_idx, deltas)
+            else:
+                data, start_idx = self.get_tabular_data(episode, frame_idx, deltas, key)
+
+            end_idx = start_idx + len(data)
+            start_pad_len = max(0, start_idx - (frame_idx + deltas[0]))
+            end_pad_len = max(0, (frame_idx + deltas[-1] + 1) - end_idx)
+            padded_data = np.array([data[0]] * start_pad_len + data + [data[-1]] * end_pad_len)
+            mask = np.array([1] * start_pad_len + [0] * len(data) + [1] * end_pad_len, dtype=bool)
+
+            expected_num_rows = deltas[-1] - deltas[0] + 1
+            assert len(padded_data) == expected_num_rows, \
+                f"Expected {expected_num_rows} rows, got {len(padded_data)} at {episode_name}/{key}/{frame_idx}"
+            batch[key] = torch.as_tensor(padded_data)
+            batch[f'{key}.padded'] = torch.as_tensor(mask)
+
+        if VIDEO_KEY in batch:  # Do this at the end for performance
+            batch[VIDEO_KEY] = batch[VIDEO_KEY].permute(0, 3, 1, 2).float() / 255
+
+        return batch
+
+    def get_frame_data(self, episode, frame_idx, frame_deltas):
         # For some reason, the decoder seems to get slower over time.
         # We can remedy this by recreating the decoder every so often,
         # but we should really try to understand why this occurs.
@@ -66,7 +114,7 @@ class EpisodeDataset(Dataset):
             self.decoders[episode.codec] = av.CodecContext.create(episode.codec.value, 'r')  # type: ignore
         self.decoder_ages[episode.codec] += 1
 
-        boxes = get_mp4_boxes(self.data_dir / episode_name / "episode.mp4")
+        boxes = get_mp4_boxes(self.data_dir / episode.name / "episode.mp4")
         video_data = boxes['mdat']
         decoder = self.decoders[episode.codec]
         decoder.extradata = episode.extradata
@@ -74,9 +122,8 @@ class EpisodeDataset(Dataset):
 
         # Decode the packets
         frames = []
-        frame_deltas = self.deltas[OBSERVATION_KEY]
-        start_idx, end_idx = get_decode_range(episode.frame_info, frame_idx + frame_deltas[0], frame_deltas[-1] - frame_deltas[0] + 1)
-        for i in range(start_idx, end_idx):
+        decode_start_idx, decode_end_idx = get_decode_range(episode.frame_info, frame_idx + frame_deltas[0], frame_deltas[-1] - frame_deltas[0] + 1)
+        for i in range(decode_start_idx, decode_end_idx):
             _, _, is_keyframe, offset = episode.frame_info[i]
             next_offset = episode.frame_info[i+1][3] if i < len(episode.frame_info) - 1 else len(video_data)
 
@@ -92,38 +139,18 @@ class EpisodeDataset(Dataset):
         for frame in decoder.decode(None):
             frames.append(frame.to_ndarray(format='rgb24'))
 
-        # Slice the frames to get the desired range
-        frames = frames[max(frame_idx + frame_deltas[0], 0) - start_idx:]
-        start_pad_len = max(0, start_idx - (frame_idx + frame_deltas[0]))
-        end_pad_len = max(0, (frame_idx + frame_deltas[-1] + 1) - end_idx)
-        padded_frames = [frames[0]] * start_pad_len + frames + [frames[-1]] * end_pad_len
-        batch[OBSERVATION_KEY] = np.stack(padded_frames).transpose(0, 3, 1, 2).astype(np.float32) / 255.0
-        batch[f'{OBSERVATION_KEY}.padded'] = np.array([1] * start_pad_len + [0] * len(frames) + [1] * end_pad_len, dtype=bool)
+        start_idx = max(frame_idx + frame_deltas[0], 0)
+        frames = frames[start_idx - decode_start_idx:]
+        return frames, start_idx
 
-        expected_num_frames = frame_deltas[-1] - frame_deltas[0] + 1
-        assert len(padded_frames) == expected_num_frames, \
-            f"Expected {expected_num_frames} frames, got {len(padded_frames)} at {episode_name}/observation/{frame_idx}, index {idx}"
+    def get_tabular_data(self, episode, frame_idx, deltas, key):
+        start_idx = max(frame_idx + deltas[0], 0)
+        end_idx = min(frame_idx + deltas[-1] + 1, len(episode.data))
+        data = list(episode.data[start_idx:end_idx][key])
+        return data, start_idx
 
-        # Slice the pyarrow table to get the desired range
-        for key, deltas in self.deltas.items():
-            if key == OBSERVATION_KEY:
-                continue
-            start_idx = max(frame_idx + deltas[0], 0)
-            end_idx = min(frame_idx + deltas[-1] + 1, len(episode.data))
 
-            data = episode.data.slice(start_idx, end_idx - start_idx)[key].to_pylist()
-            start_pad_len = max(0, start_idx - (frame_idx + deltas[0]))
-            end_pad_len = max(0, (frame_idx + deltas[-1] + 1) - end_idx)
-            padded_data = [data[0]] * start_pad_len + data + [data[-1]] * end_pad_len
-            batch[key] = np.array(padded_data, dtype=np.float32)
-            batch[f'{key}.padded'] = np.array([1] * start_pad_len + [0] * len(data) + [1] * end_pad_len, dtype=bool)
-
-            expected_num_rows = deltas[-1] - deltas[0] + 1
-            assert len(padded_data) == expected_num_rows, \
-                f"Expected {expected_num_rows} rows, got {len(padded_data)} at {episode_name}/{key}/{frame_idx}, index {idx}"
-
-        return {k: torch.as_tensor(v) for k,v in batch.items()}
-
+# Entry point for testing
 
 if __name__ == "__main__":
     import time
@@ -136,7 +163,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     delta_range = list(range(-args.frames_per_sample + 1, 1))
-    deltas = {key: delta_range for key in ['observation', 'action']}
+    deltas = {key: delta_range for key in ['observation.image', 'action.joystick', 'action.buttons']}
     dataset = EpisodeDataset(deltas=deltas)
 
     if args.mode == 'benchmark':

@@ -142,6 +142,7 @@ def encode(data_queue, savestate_path):
     stream.pix_fmt = 'yuv420p'  # Common pixel format for H.264
     stream.codec_context.options = {'crf': '23', 'g': '30'}
 
+    # Header should follow the spec defined in lakitu/datasets/dataset.py
     data_path = result_path / 'episode.data'
     fields = [('frame_index', np.uint32, ()), ('action.joystick', np.float32, (2,)), ('action.buttons', np.uint8, (14,))]
     fields = [{'name': name, 'dtype': np.dtype(dtype).name, 'shape': shape} for name, dtype, shape in fields]
