@@ -1,3 +1,4 @@
+import struct
 import numpy as np
 import multiprocessing
 import gymnasium as gym
@@ -35,7 +36,7 @@ class RemoteInputExtension(InputExtension):
 def emulator_process(rom_path, savestate_path, input_queue, data_queue, info_hooks):
     """Process that runs the emulator"""
     # Load the core and plugins
-    core = Core()
+    core = Core(log_level=0)  # No logging
     input_extension = RemoteInputExtension(core, input_queue, data_queue, savestate_path, info_hooks)
     video_extension = VideoExtension(input_extension, offscreen=True)
     core.core_startup(vidext=video_extension, inputext=input_extension)
@@ -158,6 +159,13 @@ class N64Env(gym.Env):
             self.input_queue.get_nowait()
         while not self.data_queue.empty():
             self.data_queue.get_nowait()
+
+
+# Info hooks
+
+def m64_get_level(core):
+    mem = core.core_mem_read(0x8032DDF8, 2)
+    return struct.unpack('>H', mem)[0]  # n64 is big endian
 
 
 # Example usage

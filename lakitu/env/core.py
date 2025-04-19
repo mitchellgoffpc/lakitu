@@ -27,7 +27,6 @@ from lakitu.env.platforms import DLL_EXT
 from lakitu.env.defs import LogLevel, ErrorType, PluginType, CoreFlags, CoreState, CoreCommand, EmulationState
 from lakitu.env.defs import M64pRomHeader, M64pRomSettings
 
-VERBOSE = False
 CORE_API_VERSION = 0x20001
 CONFIG_API_VERSION = 0x20302
 VIDEXT_API_VERSION = 0x030300
@@ -62,41 +61,20 @@ SKIP_MESSAGES = [
     ('Audio', 'sdl_push_samples:'),  # audio skipping bytes
 ]
 
+DEBUGFUNC = C.CFUNCTYPE(None, C.c_char_p, C.c_int, C.c_char_p)
+STATEFUNC = C.CFUNCTYPE(None, C.c_char_p, C.c_int, C.c_int)
+
 def version_split(ver):
     return "%d.%d.%d" % (
         ((ver >> 16) & 0xffff),
         ((ver >> 8) & 0xff),
         (ver & 0xff))
 
-def debug_callback(context, level, message):
-    if any(context.decode() == ctx and message.decode().startswith(msg) for ctx, msg in SKIP_MESSAGES):
-        return
-    if level <= LogLevel.ERROR:
-        sys.stderr.write("%s: %s\n" % (context.decode(), message.decode()))
-    elif level <= LogLevel.WARNING:
-        sys.stderr.write("%s: %s\n" % (context.decode(), message.decode()))
-    elif level <= LogLevel.INFO:
-        sys.stderr.write("%s: %s\n" % (context.decode(), message.decode()))
-    elif level <= LogLevel.VERBOSE and VERBOSE:
-        sys.stderr.write("%s: %s\n" % (context.decode(), message.decode()))
-
-def state_callback(context, param, value):
-    if param == CoreState.VIDEO_SIZE:
-        pass
-    elif param == CoreState.VIDEO_MODE:
-        pass
-
-DEBUGFUNC = C.CFUNCTYPE(None, C.c_char_p, C.c_int, C.c_char_p)
-STATEFUNC = C.CFUNCTYPE(None, C.c_char_p, C.c_int, C.c_int)
-
-DEBUG_CALLBACK = DEBUGFUNC(debug_callback)
-STATE_CALLBACK = STATEFUNC(state_callback)
-
 
 class Core:
     """Mupen64Plus Core library"""
 
-    def __init__(self):
+    def __init__(self, log_level=LogLevel.INFO):
         """Constructor."""
         self.plugins = []
         self.plugin_map = {}
@@ -108,12 +86,11 @@ class Core:
         self.core_path = str(CORE_LIB_PATH / 'libmupen64plus.dylib')
         self.core_name = "Mupen64Plus Core"
         self.core_version = ""
+        self.log_level = log_level
+        self.logging_callback = DEBUGFUNC(self.handle_log_message)
+        self.state_callback = STATEFUNC(self.handle_state_update)
         self.m64p = load(self.core_path)
         self.check_version()
-
-    def get_handle(self):
-        """Retrieves core library handle."""
-        return self.m64p
 
     def check_version(self):
         """Checks core API version."""
@@ -174,12 +151,21 @@ class Core:
         rval = self.m64p.CoreErrorMessage(return_code).decode()
         return rval
 
+    def handle_log_message(self, context, level, message):
+        if any(context.decode() == ctx and message.decode().startswith(msg) for ctx, msg in SKIP_MESSAGES):
+            return
+        if self.log_level >= level:
+            sys.stderr.write("%s: %s\n" % (context.decode(), message.decode()))
+
+    def handle_state_update(self, context, param, value):
+        pass
+
     def core_startup(self, vidext=None, inputext=None):
         """Initializes libmupen64plus for use by allocating memory,
         creating data structures, and loading the configuration file."""
         rval = self.m64p.CoreStartup(
             C.c_int(CORE_API_VERSION), C.c_char_p(str(CORE_LIB_PATH).encode()), C.c_char_p(str(CORE_LIB_PATH).encode()),
-            C.c_char_p(b"Core"), DEBUG_CALLBACK, C.c_char_p(b"State"), STATE_CALLBACK)
+            C.c_char_p(b"Core"), self.logging_callback, C.c_char_p(b"State"), self.state_callback)
         if rval == ErrorType.SUCCESS:
             self.inputext = inputext
             if vidext:
@@ -259,7 +245,7 @@ class Core:
     def plugin_startup(self, plugin_type):
         """This function initializes plugin for use by allocating memory, creating data structures, and loading the configuration data."""
         plugin_handle, _, plugin_name, plugin_desc, _ = self.plugin_map[plugin_type]
-        rval = plugin_handle.PluginStartup(C.c_void_p(self.m64p._handle), plugin_name, DEBUG_CALLBACK)
+        rval = plugin_handle.PluginStartup(C.c_void_p(self.m64p._handle), plugin_name, self.logging_callback)
         if rval != ErrorType.SUCCESS:
             log.debug("plugin_startup()")
             log.warn(self.error_message(rval))
