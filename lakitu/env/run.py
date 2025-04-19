@@ -1,14 +1,14 @@
 import av
-import csv
 import cv2
 import hid
 import glfw
 import json
-import math
+import struct
 import shutil
 import argparse
 import datetime
 import threading
+import numpy as np
 import multiprocessing
 from pathlib import Path
 
@@ -116,7 +116,7 @@ class KeyboardInputExtension(InputExtension):
         ctl_x_axis, ctl_y_axis = parse_stick_data(self.gamepad_report, left=True)
         kb_x_axis = sum(value for key, value in KEYBOARD_AXES['X_AXIS'].items() if key in self.pressed_keys)
         kb_y_axis = sum(value for key, value in KEYBOARD_AXES['Y_AXIS'].items() if key in self.pressed_keys)
-        magnitude = math.sqrt(kb_x_axis**2 + kb_y_axis**2) + 1e-6
+        magnitude = np.sqrt(kb_x_axis**2 + kb_y_axis**2) + 1e-6
         x_axis = max(-1, min(1, kb_x_axis / magnitude + ctl_x_axis))
         y_axis = max(-1, min(1, kb_y_axis / magnitude + ctl_y_axis))
         controller_state.X_AXIS = int(x_axis * 127)
@@ -128,46 +128,46 @@ class KeyboardInputExtension(InputExtension):
 
 def encode(data_queue, savestate_path):
     current_time = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    result_path = Path(__file__).parent.parent / 'data' / 'rollouts' / current_time
+    result_path = Path(__file__).parent.parent / 'data' / 'episodes' / current_time
     result_path.mkdir(parents=True, exist_ok=True)
 
     if savestate_path:
         shutil.copy(savestate_path, result_path / 'initial_state.m64p')
 
     width, height, fps = 320, 240, 30
-    container = av.open(str(result_path / 'observations.mp4'), mode='w')
+    container = av.open(str(result_path / 'episode.mp4'), mode='w')
     stream = container.add_stream('h264', rate=fps)
     stream.width = width
     stream.height = height
     stream.pix_fmt = 'yuv420p'  # Common pixel format for H.264
-    stream.codec_context.options = {
-        'crf': '23',
-        'g': '30',
-    }
+    stream.codec_context.options = {'crf': '23', 'g': '30'}
 
-    with open(result_path / 'actions.csv', 'w', newline='') as csvfile:
-        fieldnames = ['frame_index', 'controller_index'] + [field for field, *_ in M64pButtons._fields_]
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
+    data_path = result_path / 'episode.data'
+    fields = [('frame_index', np.uint32, ()), ('action.joystick', np.float32, (2,)), ('action.buttons', np.uint8, (14,))]
+    fields = [{'name': name, 'dtype': np.dtype(dtype).name, 'shape': shape} for name, dtype, shape in fields]
+    header = json.dumps(fields).encode('utf-8')
+    header = struct.pack('<I', len(header)) + header
+    row_size = sum(np.dtype(field['dtype']).itemsize * (np.prod(field['shape']) if field['shape'] else 1) for field in fields)
 
-        frame_count = 0
+    frame_count = 0
+    with open(data_path, 'wb') as f:
+        f.write(header)
         while (data := data_queue.get()) is not None:
-            frame, controller_states, info = data
+            frame, controller_states, _ = data
             frame = cv2.resize(frame[::-1], (width, height))
             av_frame = av.VideoFrame.from_ndarray(frame, format='rgb24')
             packet = stream.encode(av_frame)
             container.mux(packet)
-            for i, state in enumerate(controller_states):
-                state_dict = {field: getattr(state, field) for field, *_ in M64pButtons._fields_}
-                writer.writerow({'frame_index': frame_count, 'controller_index': i, **state_dict})
+            joystick = [float(getattr(controller_states[0], field)) / 127 for field in M64pButtons.get_joystick_fields()]
+            buttons = [int(getattr(controller_states[0], field)) for field in M64pButtons.get_button_fields()]
+            row = struct.pack('<I2f14B', frame_count, *joystick, *buttons)
+            assert len(row) == row_size, f"Row size mismatch: {len(row)} != {row_size}"
+            f.write(row)
             frame_count += 1
 
     packet = stream.encode(None)
     container.mux(packet)
     container.close()
-
-    with open(result_path / 'info.json', 'w') as f:
-        json.dump({'num_steps': frame_count}, f, indent=2)
 
 
 # Entry point
