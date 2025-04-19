@@ -144,11 +144,11 @@ def encode(data_queue, savestate_path):
 
     # Header should follow the spec defined in lakitu/datasets/dataset.py
     data_path = result_path / 'episode.data'
-    fields = [('frame_index', np.uint32, ()), ('action.joystick', np.float32, (2,)), ('action.buttons', np.uint8, (14,))]
-    fields = [{'name': name, 'dtype': np.dtype(dtype).name, 'shape': shape} for name, dtype, shape in fields]
+    field_defs = [('frame_index', np.uint32, ()), ('action.joystick', np.float32, (2,)), ('action.buttons', np.uint8, (14,))]
+    fields = [{'name': name, 'dtype': np.dtype(dtype).name, 'shape': shape} for name, dtype, shape in field_defs]
     header = json.dumps(fields).encode('utf-8')
     header = struct.pack('<I', len(header)) + header
-    row_size = sum(np.dtype(field['dtype']).itemsize * (np.prod(field['shape']) if field['shape'] else 1) for field in fields)
+    row_size = sum(np.dtype(dtype).itemsize * (np.prod(shape) if shape else 1) for _, dtype, shape in field_defs)
 
     frame_count = 0
     with open(data_path, 'wb') as f:

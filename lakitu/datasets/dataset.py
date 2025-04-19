@@ -106,6 +106,9 @@ class EpisodeDataset(Dataset):
         return batch
 
     def get_frame_data(self, episode, frame_idx, frame_deltas):
+        decode_start_idx, decode_end_idx = \
+            get_decode_range(episode.frame_info, frame_idx + frame_deltas[0], frame_deltas[-1] - frame_deltas[0] + 1)
+
         # For some reason, the decoder seems to get slower over time.
         # We can remedy this by recreating the decoder every so often,
         # but we should really try to understand why this occurs.
@@ -122,7 +125,6 @@ class EpisodeDataset(Dataset):
 
         # Decode the packets
         frames = []
-        decode_start_idx, decode_end_idx = get_decode_range(episode.frame_info, frame_idx + frame_deltas[0], frame_deltas[-1] - frame_deltas[0] + 1)
         for i in range(decode_start_idx, decode_end_idx):
             _, _, is_keyframe, offset = episode.frame_info[i]
             next_offset = episode.frame_info[i+1][3] if i < len(episode.frame_info) - 1 else len(video_data)
