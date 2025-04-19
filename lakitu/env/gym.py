@@ -71,8 +71,8 @@ class N64Env(gym.Env):
 
     def __init__(self, rom_path, savestate_path=None, render_mode=None, info_hooks=None):
         super().__init__()
-        self.rom_path = rom_path
-        self.savestate_path = savestate_path
+        self.rom_path = str(rom_path)
+        self.savestate_path = str(savestate_path) if savestate_path else None
         self.render_mode = render_mode
         self.info_hooks = info_hooks
         self.emulator_proc = None
@@ -110,11 +110,12 @@ class N64Env(gym.Env):
         self.current_frame = None
         if self.emulator_proc is None:
             self._start_emulator()
+            self.input_queue.put([M64pButtons()])  # Send an initial empty state to the emulator
         else:
             self.input_queue.put("RESET")
-            self.data_queue.get()  # Wait for the emulator to reset
+        frame, _, info = self.data_queue.get()  # Wait for the emulator to reset
 
-        return None, {}
+        return frame, info
 
     def step(self, action):
         """Take a step in the environment"""
@@ -136,7 +137,7 @@ class N64Env(gym.Env):
             setattr(controller_state, button_name, int(action['buttons'][i]))
 
         self.input_queue.put([controller_state])
-        frame, controller_states, info = self.data_queue.get()
+        frame, _, info = self.data_queue.get()
 
         observation = frame[::-1]  # Flip vertically
         terminated = False
@@ -168,11 +169,6 @@ class N64Env(gym.Env):
 
 
 # Example usage
-def get_level(core):
-    import struct
-    mem = core.core_mem_read(0x8032DDF8, 2)
-    level = struct.unpack('>H', mem)[0]  # n64 is big endian
-    return level
 
 if __name__ == "__main__":
     import argparse
@@ -188,7 +184,7 @@ if __name__ == "__main__":
     pygame.display.set_caption('N64')
     clock = pygame.time.Clock()
 
-    env = N64Env(args.rom_path, args.savestate, info_hooks={'level': get_level}, render_mode="rgb_array")
+    env = N64Env(args.rom_path, args.savestate, render_mode="rgb_array")
     observation, info = env.reset()
 
     running = True
