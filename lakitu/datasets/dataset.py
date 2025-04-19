@@ -84,11 +84,10 @@ class EpisodeDataset(Dataset):
         batch = {}
         for key, deltas in self.deltas.items():
             if key == VIDEO_KEY:
-                data, start_idx = self.get_frame_data(episode, frame_idx, deltas)
+                data, start_idx, end_idx = self.get_frame_data(episode, frame_idx, deltas)
             else:
-                data, start_idx = self.get_tabular_data(episode, frame_idx, deltas, key)
+                data, start_idx, end_idx = self.get_tabular_data(episode, frame_idx, deltas, key)
 
-            end_idx = start_idx + len(data)
             start_pad_len = max(0, start_idx - (frame_idx + deltas[0]))
             end_pad_len = max(0, (frame_idx + deltas[-1] + 1) - end_idx)
             padded_data = np.array([data[0]] * start_pad_len + data + [data[-1]] * end_pad_len)
@@ -142,14 +141,15 @@ class EpisodeDataset(Dataset):
             frames.append(frame.to_ndarray(format='rgb24'))
 
         start_idx = max(frame_idx + frame_deltas[0], 0)
-        frames = frames[start_idx - decode_start_idx:]
-        return frames, start_idx
+        end_idx = min(frame_idx + frame_deltas[-1] + 1, len(episode.data))
+        frames = frames[start_idx - decode_start_idx:end_idx - decode_start_idx]
+        return frames, start_idx, end_idx
 
     def get_tabular_data(self, episode, frame_idx, deltas, key):
         start_idx = max(frame_idx + deltas[0], 0)
         end_idx = min(frame_idx + deltas[-1] + 1, len(episode.data))
         data = list(episode.data[start_idx:end_idx][key])
-        return data, start_idx
+        return data, start_idx, end_idx
 
 
 # Entry point for testing
@@ -179,12 +179,13 @@ if __name__ == "__main__":
         print(f"Average speed: {num_samples/elapsed:.2f} samples/second")
 
     elif args.mode == 'visualize':
-        frame, _ = dataset[0]
+        frame = dataset[0]['observation.image']
         _, _, H, W = frame.shape
 
+        import cv2
         import pygame
         pygame.init()
-        screen = pygame.display.set_mode((W, H))
+        screen = pygame.display.set_mode((W * 2, H * 2))
         clock = pygame.time.Clock()
 
         running = True
@@ -195,10 +196,11 @@ if __name__ == "__main__":
                     running = False
 
             if not frames:
-                frames_tensor, _ = dataset[np.random.randint(len(dataset))]
-                frames = list(frames_tensor.permute(0, 2, 3, 1).numpy())
+                frames_tensor = dataset[np.random.randint(len(dataset))]['observation.image']
+                frames = list((frames_tensor.permute(0, 2, 3, 1).numpy() * 255).astype(np.uint8))
 
             frame = frames.pop(0)
+            frame = cv2.resize(frame, (W * 2, H * 2))
             surface = pygame.surfarray.make_surface(frame.swapaxes(0, 1))
             screen.blit(surface, (0, 0))
             pygame.display.flip()

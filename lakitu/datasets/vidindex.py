@@ -240,7 +240,8 @@ def get_frame_info(boxes):
 
 def get_decode_range(frame_info, frame_idx, num_frames):
     start_idx = next((i for i in range(frame_idx, -1, -1) if frame_info[i][2]), 0)
-    end_idx = min(frame_idx + num_frames, len(frame_info))
+    end_idx = next((i for i in range(frame_idx + num_frames, len(frame_info)) if frame_info[i][2]), len(frame_info))
+    # end_idx = min(frame_idx + num_frames, len(frame_info))  # NOTE: This seeemed to work for av1, but doesn't work for h264?
     return start_idx, end_idx
 
 
