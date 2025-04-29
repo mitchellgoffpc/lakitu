@@ -13,22 +13,31 @@ from torch import Tensor
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 
-DatasetStats = dict[str, dict[str, Tensor]]
+IMAGENET_STATS = {
+    "mean": [0.485, 0.456, 0.406],
+    "std": [0.229, 0.224, 0.225],
+}
+
 
 class NormalizationMode(str, Enum):
     MIN_MAX = "MIN_MAX"
     MEAN_STD = "MEAN_STD"
     IDENTITY = "IDENTITY"
 
+
 class FeatureType(str, Enum):
     STATE = "STATE"
     VISUAL = "VISUAL"
     ACTION = "ACTION"
 
+
 @dataclass
 class PolicyFeature:
     type: FeatureType
     shape: tuple[int, ...]
+    norm_mode: NormalizationMode
+    stats: dict[str, list[float]]
+
 
 @dataclass
 class DiffusionConfig:
@@ -41,19 +50,23 @@ class DiffusionConfig:
     horizon: int = 16
     n_action_steps: int = 8
 
-    input_features: dict[str, PolicyFeature] = field(default_factory=lambda: {
-       "observation.image": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 240, 320)),
-    })
-    output_features: dict[str, PolicyFeature] = field(default_factory=lambda: {
-        "action.buttons": PolicyFeature(type=FeatureType.ACTION, shape=(14,)),
-        "action.joystick": PolicyFeature(type=FeatureType.ACTION, shape=(2,)),
-    })
-
-    normalization_mapping: dict[str, NormalizationMode] = field(default_factory=lambda: {
-        "VISUAL": NormalizationMode.MEAN_STD,
-        "STATE": NormalizationMode.MIN_MAX,
-        "ACTION": NormalizationMode.MIN_MAX,
-    })
+    input_features: dict[str, PolicyFeature] = field(
+        default_factory=lambda: {
+            "observation.image": PolicyFeature(
+                type=FeatureType.VISUAL, shape=(3, 240, 320), norm_mode=NormalizationMode.MEAN_STD, stats=IMAGENET_STATS
+            ),
+        }
+    )
+    output_features: dict[str, PolicyFeature] = field(
+        default_factory=lambda: {
+            "action.buttons": PolicyFeature(
+                type=FeatureType.ACTION, shape=(14,), norm_mode=NormalizationMode.MIN_MAX, stats={"min": [0.0], "max": [1.0]}
+            ),
+            "action.joystick": PolicyFeature(
+                type=FeatureType.ACTION, shape=(2,), norm_mode=NormalizationMode.MIN_MAX, stats={"min": [-1.0], "max": [1.0]}
+            ),
+        }
+    )
 
     # The original implementation doesn't sample frames for the last 7 steps,
     # which avoids excessive padding and leads to improved training results.
@@ -64,7 +77,6 @@ class DiffusionConfig:
     vision_backbone: str = "resnet18"
     crop_shape: tuple[int, int] | None = (84, 84)
     crop_is_random: bool = True
-    use_separate_rgb_encoder_per_camera: bool = False
     pretrained_backbone_weights: str | None = None
     use_group_norm: bool = True
     # Unet.
@@ -90,14 +102,6 @@ class DiffusionConfig:
     # Loss computation
     do_mask_loss_for_padding: bool = False
 
-    # Training presets
-    optimizer_lr: float = 1e-4
-    optimizer_betas: tuple = (0.95, 0.999)
-    optimizer_eps: float = 1e-8
-    optimizer_weight_decay: float = 1e-6
-    scheduler_name: str = "cosine"
-    scheduler_warmup_steps: int = 500
-
     @property
     def state_features(self) -> dict[str, PolicyFeature]:
         return {key: ft for key, ft in self.input_features.items() if ft.type is FeatureType.STATE}
@@ -115,15 +119,16 @@ class DiffusionConfig:
         return sum(ft.shape[0] for ft in self.action_features.values())
 
     @property
-    def observation_delta_indices(self) -> list:
+    def observation_delta_indices(self) -> list[int]:
         return list(range(1 - self.n_obs_steps, 1))
 
     @property
-    def action_delta_indices(self) -> list:
+    def action_delta_indices(self) -> list[int]:
         return list(range(1 - self.n_obs_steps, 1 - self.n_obs_steps + self.horizon))
 
 
 # Helper functions
+
 
 def _make_noise_scheduler(name: str, **kwargs: Any) -> Any:
     if name == "DDPM":
@@ -132,6 +137,7 @@ def _make_noise_scheduler(name: str, **kwargs: Any) -> Any:
         return DDIMScheduler(**kwargs)
     else:
         raise ValueError(f"Unsupported noise scheduler type {name}")
+
 
 def _replace_batchnorm(module: nn.Module) -> nn.Module:
     for name, child in module.named_children():
@@ -143,13 +149,13 @@ def _replace_batchnorm(module: nn.Module) -> nn.Module:
 
 
 class DiffusionPolicy(nn.Module):
-    def __init__(self, config: DiffusionConfig, dataset_stats: DatasetStats | None = None):
+    def __init__(self, config: DiffusionConfig):
         super().__init__()
         self.config = config
 
-        self.normalize_inputs = Normalize(config.input_features, config.normalization_mapping, dataset_stats)
-        self.normalize_targets = Normalize(config.output_features, config.normalization_mapping, dataset_stats)
-        self.unnormalize_outputs = Unnormalize(config.output_features, config.normalization_mapping, dataset_stats)
+        self.normalize_inputs = Normalize(config.input_features)
+        self.normalize_targets = Normalize(config.output_features)
+        self.unnormalize_outputs = Unnormalize(config.output_features)
 
         # Build observation encoders (depending on which observations are provided).
         global_cond_dim = sum(feat.shape[0] for feat in self.config.state_features.values())
@@ -274,7 +280,7 @@ class DiffusionPolicy(nn.Module):
             in_episode_bound = ~batch["action_is_pad"]
             loss = loss * in_episode_bound.unsqueeze(-1)
 
-        return loss.mean(), {'pred': pred}
+        return loss.mean(), {"pred": pred}
 
     def _prepare_global_conditioning(self, batch: dict[str, Tensor]) -> Tensor:
         image_feature = next(iter(self.config.image_features.keys()))
@@ -354,39 +360,48 @@ class DiffusionConditionalUnet1d(nn.Module):
         cond_dim = config.diffusion_step_embed_dim + global_cond_dim
 
         # In channels / out channels for each downsampling block in the Unet's encoder. For the decoder, we just reverse these.
-        in_out = [(config.action_size, config.down_dims[0])] + \
-            list(zip(config.down_dims[:-1], config.down_dims[1:], strict=True))
+        in_out = [(config.action_size, config.down_dims[0])] + list(zip(config.down_dims[:-1], config.down_dims[1:], strict=True))
 
         # Unet encoder
         kernel_size, n_groups, use_film_scale = config.kernel_size, config.n_groups, config.use_film_scale_modulation
         self.down_modules = nn.ModuleList([])
         for ind, (dim_in, dim_out) in enumerate(in_out):
             is_last = ind >= (len(in_out) - 1)
-            self.down_modules.append(nn.ModuleList([
-                DiffusionConditionalResidualBlock1d(dim_in, dim_out, cond_dim, kernel_size, n_groups, use_film_scale),
-                DiffusionConditionalResidualBlock1d(dim_out, dim_out, cond_dim, kernel_size, n_groups, use_film_scale),
-                # Downsample as long as it is not the last block.
-                nn.Conv1d(dim_out, dim_out, 3, 2, 1) if not is_last else nn.Identity(),
-            ]))
+            self.down_modules.append(
+                nn.ModuleList(
+                    [
+                        DiffusionConditionalResidualBlock1d(dim_in, dim_out, cond_dim, kernel_size, n_groups, use_film_scale),
+                        DiffusionConditionalResidualBlock1d(dim_out, dim_out, cond_dim, kernel_size, n_groups, use_film_scale),
+                        # Downsample as long as it is not the last block.
+                        nn.Conv1d(dim_out, dim_out, 3, 2, 1) if not is_last else nn.Identity(),
+                    ]
+                )
+            )
 
         # Processing in the middle of the auto-encoder
         mid_dim = config.down_dims[-1]
-        self.mid_modules = nn.ModuleList([
-            DiffusionConditionalResidualBlock1d(mid_dim, mid_dim, cond_dim, kernel_size, n_groups, use_film_scale),
-            DiffusionConditionalResidualBlock1d(mid_dim, mid_dim, cond_dim, kernel_size, n_groups, use_film_scale),
-        ])
+        self.mid_modules = nn.ModuleList(
+            [
+                DiffusionConditionalResidualBlock1d(mid_dim, mid_dim, cond_dim, kernel_size, n_groups, use_film_scale),
+                DiffusionConditionalResidualBlock1d(mid_dim, mid_dim, cond_dim, kernel_size, n_groups, use_film_scale),
+            ]
+        )
 
         # Unet decoder
         self.up_modules = nn.ModuleList([])
         for ind, (dim_out, dim_in) in enumerate(reversed(in_out[1:])):
             is_last = ind >= (len(in_out) - 1)
-            self.up_modules.append(nn.ModuleList([
-                # dim_in * 2, because it takes the encoder's skip connection as well
-                DiffusionConditionalResidualBlock1d(dim_in * 2, dim_out, cond_dim, kernel_size, n_groups, use_film_scale),
-                DiffusionConditionalResidualBlock1d(dim_out, dim_out, cond_dim, kernel_size, n_groups, use_film_scale),
-                # Upsample as long as it is not the last block.
-                nn.ConvTranspose1d(dim_out, dim_out, 4, 2, 1) if not is_last else nn.Identity(),
-            ]))
+            self.up_modules.append(
+                nn.ModuleList(
+                    [
+                        # dim_in * 2, because it takes the encoder's skip connection as well
+                        DiffusionConditionalResidualBlock1d(dim_in * 2, dim_out, cond_dim, kernel_size, n_groups, use_film_scale),
+                        DiffusionConditionalResidualBlock1d(dim_out, dim_out, cond_dim, kernel_size, n_groups, use_film_scale),
+                        # Upsample as long as it is not the last block.
+                        nn.ConvTranspose1d(dim_out, dim_out, 4, 2, 1) if not is_last else nn.Identity(),
+                    ]
+                )
+            )
 
         self.final_conv = nn.Sequential(
             DiffusionConv1dBlock(config.down_dims[0], config.down_dims[0], kernel_size=config.kernel_size),
@@ -471,8 +486,8 @@ class DiffusionConditionalResidualBlock1d(nn.Module):
 
         cond_embed = self.cond_encoder(cond).unsqueeze(-1)
         if self.use_film_scale:
-            scale = cond_embed[:, :self.out_channels]
-            bias = cond_embed[:, self.out_channels:]
+            scale = cond_embed[:, : self.out_channels]
+            bias = cond_embed[:, self.out_channels :]
             out = scale * out + bias
         else:
             out = out + cond_embed
@@ -482,100 +497,63 @@ class DiffusionConditionalResidualBlock1d(nn.Module):
         return out
 
 
-def create_stats_buffers(
-    features: dict[str, PolicyFeature],
-    norm_map: dict[str, NormalizationMode],
-    stats: DatasetStats | None = None,
-) -> nn.ModuleDict:
+def create_stats_buffer(stat: float | list[float], shape: tuple[int, ...]) -> nn.Parameter:
+    stat_tensor = torch.as_tensor(stat).float()
+    stat_tensor = stat_tensor.reshape(*stat_tensor.shape, *((1,) * (len(shape) - len(stat_tensor.shape))))
+    return nn.Parameter(stat_tensor, requires_grad=False)
+
+def create_stats_buffers(features: dict[str, PolicyFeature]) -> nn.ModuleDict:
     stats_buffers = {}
-
     for key, ft in features.items():
-        norm_mode = norm_map.get(ft.type, NormalizationMode.IDENTITY)
-        assert isinstance(norm_mode, NormalizationMode)
-        if norm_mode is NormalizationMode.IDENTITY:
-            continue
-
-        shape = tuple(ft.shape)
-        if ft.type is FeatureType.VISUAL:
-            assert len(shape) == 3, f"number of dimensions of {key} != 3 ({shape=}"
-            c, h, w = shape
-            assert c < h and c < w, f"{key} is not channel first ({shape=})"
-            shape = (c, 1, 1)  # override image shape to be invariant to height and width
-
-        buffer = {}
-        if norm_mode is NormalizationMode.MEAN_STD:
-            buffer = {
-                "mean": torch.as_tensor(stats[key]["mean"]).float() if stats else torch.full(shape, torch.nan),
-                "std": torch.as_tensor(stats[key]["std"]).float() if stats else torch.full(shape, torch.nan),
-            }
-        elif norm_mode is NormalizationMode.MIN_MAX:
-            buffer = {
-                "min": torch.as_tensor(stats[key]["min"]).float() if stats else torch.full(shape, torch.nan),
-                "max": torch.as_tensor(stats[key]["max"]).float() if stats else torch.full(shape, torch.nan),
-            }
-
-        stats_buffers[key.replace('.', '_')] = nn.ParameterDict({k: nn.Parameter(v, requires_grad=False) for k, v in buffer.items()})
-
+        stats_buffers[key.replace(".", "_")] = nn.ParameterDict({k: create_stats_buffer(v, ft.shape) for k, v in ft.stats.items()})
     return nn.ModuleDict(stats_buffers)
 
 
 class Normalize(nn.Module):
-    def __init__(self, features: dict[str, PolicyFeature], norm_map: dict[str, NormalizationMode], stats: DatasetStats | None):
+    def __init__(self, features: dict[str, PolicyFeature]):
         super().__init__()
         self.features = features
-        self.norm_map = norm_map
-        self.stats_buffers = create_stats_buffers(features, norm_map, stats)
+        self.stats_buffers = create_stats_buffers(features)
 
     @torch.no_grad()
     def forward(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
-        batch = dict(batch)
+        batch = batch.copy()
         for key, ft in self.features.items():
             assert key in batch
-            norm_mode = self.norm_map.get(ft.type, NormalizationMode.IDENTITY)
-            buffer = self.stats_buffers[key.replace('.', '_')]
-            if norm_mode is NormalizationMode.MEAN_STD:
+            buffer = self.stats_buffers[key.replace(".", "_")]
+            if ft.norm_mode is NormalizationMode.MEAN_STD:
                 batch[key] = (batch[key] - buffer["mean"]) / (buffer["std"] + 1e-8)
-            elif norm_mode is NormalizationMode.MIN_MAX:
+            elif ft.norm_mode is NormalizationMode.MIN_MAX:
                 batch[key] = (batch[key] - buffer["min"]) / (buffer["max"] - buffer["min"] + 1e-8)
                 batch[key] = batch[key] * 2 - 1  # normalize to [-1, 1]
-            assert torch.all(torch.isfinite(batch[key])), f"Stats are not initialized for key {key}"
 
         return batch
 
 
 class Unnormalize(nn.Module):
-    def __init__(self, features: dict[str, PolicyFeature], norm_map: dict[str, NormalizationMode], stats: DatasetStats | None):
+    def __init__(self, features: dict[str, PolicyFeature]):
         super().__init__()
         self.features = features
-        self.norm_map = norm_map
-        self.stats_buffers = create_stats_buffers(features, norm_map, stats)
+        self.stats_buffers = create_stats_buffers(features)
 
     @torch.no_grad()
     def forward(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
-        batch = dict(batch)  # shallow copy avoids mutating the input batch
+        batch = batch.copy()
         for key, ft in self.features.items():
             assert key in batch
-            norm_mode = self.norm_map.get(ft.type, NormalizationMode.IDENTITY)
-            buffer = self.stats_buffers[key.replace('.', '_')]
-            if norm_mode is NormalizationMode.MEAN_STD:
+            buffer = self.stats_buffers[key.replace(".", "_")]
+            if ft.norm_mode is NormalizationMode.MEAN_STD:
                 batch[key] = batch[key] * buffer["std"] + buffer["mean"]
-            elif norm_mode is NormalizationMode.MIN_MAX:
+            elif ft.norm_mode is NormalizationMode.MIN_MAX:
                 batch[key] = (batch[key] + 1) / 2
                 batch[key] = batch[key] * (buffer["max"] - buffer["min"]) + buffer["min"]
-            assert torch.all(torch.isfinite(batch[key])), f"Stats are not initialized for key {key}"
 
         return batch
 
 
 if __name__ == "__main__":
-    stats = {
-        "observation.image": {"mean": torch.tensor([0.5, 0.5, 0.5])[:, None, None], "std": torch.tensor([0.5, 0.5, 0.5])[:, None, None]},
-        "action.joystick": {"min": torch.tensor([-1, -1]), "max": torch.tensor([1, 1])},
-        "action.buttons": {"min": torch.tensor([0] * 14), "max": torch.tensor([1] * 14)},
-    }
-
     config = DiffusionConfig(device="cpu")
-    model = DiffusionPolicy(config, stats)
+    model = DiffusionPolicy(config)
     device = torch.device(config.device)
 
     # Create dummy batch
