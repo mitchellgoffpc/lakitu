@@ -69,9 +69,9 @@ class EpisodeDataset(Dataset):
             self.episodes[episode_name] = EpisodeData(episode_name, data, codec_type, frame_info, extradata, start_idx, end_idx)
             self.episodes_by_idx.extend([episode_name] * len(data))
 
-        codecs = set(ep.codec for ep in self.episodes.values())
-        self.decoders: dict[CodecType, av.VideoCodecContext | None] = {codec: None for codec in codecs}
-        self.decoder_ages = {codec: 0 for codec in codecs}
+        # Need to create the decoders lazily since they can't be pickled for the multiprocessing workers
+        self.decoders: dict[CodecType, av.VideoCodecContext] = {}
+        self.decoder_ages: dict[CodecType, int] = {}
 
     def __len__(self):
         return len(self.episodes_by_idx)
@@ -108,21 +108,17 @@ class EpisodeDataset(Dataset):
         decode_start_idx, decode_end_idx = \
             get_decode_range(episode.frame_info, frame_idx + frame_deltas[0], frame_deltas[-1] - frame_deltas[0] + 1)
 
-        # Need to create the decoders lazily since they can't be pickled for the multiprocessing workers
-        if self.decoders[episode.codec] is None:
-            self.decoders[episode.codec] = av.CodecContext.create(episode.codec.value, 'r')
-
         # For some reason, the decoder seems to get slower over time.
         # We can remedy this by recreating the decoder every so often,
         # but we should really try to understand why this occurs.
-        if self.decoder_ages[episode.codec] >= 100:
+        if episode.codec not in self.decoders or self.decoder_ages[episode.codec] >= 100:
             self.decoder_ages[episode.codec] = 0
             self.decoders[episode.codec] = av.CodecContext.create(episode.codec.value, 'r')  # type: ignore
         self.decoder_ages[episode.codec] += 1
 
         boxes = get_mp4_boxes(self.data_dir / episode.name / "episode.mp4")
         video_data = boxes['mdat']
-        decoder = self.decoders[episode.codec]
+        decoder: av.VideoCodecContext = self.decoders[episode.codec]
         decoder.extradata = episode.extradata
         decoder.flush_buffers()
 
