@@ -70,7 +70,7 @@ class EpisodeDataset(Dataset):
             self.episodes_by_idx.extend([episode_name] * len(data))
 
         codecs = set(ep.codec for ep in self.episodes.values())
-        self.decoders: dict[CodecType, av.VideoCodecContext] = {codec: av.CodecContext.create(codec.value, 'r') for codec in codecs}  # type: ignore
+        self.decoders: dict[CodecType, av.VideoCodecContext | None] = {codec: None for codec in codecs}
         self.decoder_ages = {codec: 0 for codec in codecs}
 
     def __len__(self):
@@ -107,6 +107,10 @@ class EpisodeDataset(Dataset):
     def get_frame_data(self, episode, frame_idx, frame_deltas):
         decode_start_idx, decode_end_idx = \
             get_decode_range(episode.frame_info, frame_idx + frame_deltas[0], frame_deltas[-1] - frame_deltas[0] + 1)
+
+        # Need to create the decoders lazily since they can't be pickled for the multiprocessing workers
+        if self.decoders[episode.codec] is None:
+            self.decoders[episode.codec] = av.CodecContext.create(episode.codec.value, 'r')
 
         # For some reason, the decoder seems to get slower over time.
         # We can remedy this by recreating the decoder every so often,
