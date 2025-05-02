@@ -36,22 +36,26 @@ class EnvConfig:
 @dataclass
 class EvalConfig:
     env: EnvConfig = field(default_factory=EnvConfig)
-    policy: DiffusionConfig = field(default_factory=DiffusionConfig)
     output_dir: Path | None = None
-    policy_path: Path | None = None
     num_episodes: int = 4
     num_envs: int = 4
     seed: int = 1000
 
+@dataclass
+class EvalPolicyConfig:
+    eval: EvalConfig = field(default_factory=EvalConfig)
+    policy: DiffusionConfig = field(default_factory=DiffusionConfig)
+    policy_path: Path | None = None
+
     @classmethod
-    def create(cls, *args: Any) -> "EvalConfig":
+    def create(cls, *args: Any) -> "EvalPolicyConfig":
         schema = OmegaConf.structured(cls)
         config = OmegaConf.merge(schema, *args)
-        result: EvalConfig = OmegaConf.to_object(config)  # type: ignore
+        result: EvalPolicyConfig = OmegaConf.to_object(config)  # type: ignore
         return result
 
     @classmethod
-    def from_cli(cls) -> "EvalConfig":
+    def from_cli(cls) -> "EvalPolicyConfig":
         return cls.create(OmegaConf.from_cli())
 
 
@@ -173,18 +177,18 @@ def eval_policy(config: EvalConfig, policy: DiffusionPolicy) -> dict:
     }
 
 
-def eval_main(config: EvalConfig) -> None:
+def eval_main(config: EvalPolicyConfig) -> None:
     device = torch.device(config.policy.device)
     torch.backends.cudnn.benchmark = True
     torch.backends.cuda.matmul.allow_tf32 = True
-    set_seed(config.seed)
+    set_seed(config.eval.seed)
 
     policy = DiffusionPolicy(config.policy).to(device)
     # policy = DiffusionPolicy.from_pretrained(config.policy, config.policy_path)
 
-    info = eval_policy(config, policy)
+    info = eval_policy(config.eval, policy)
     print(info["aggregated"])
 
 
 if __name__ == "__main__":
-    eval_main(EvalConfig.from_cli())
+    eval_main(EvalPolicyConfig.from_cli())
