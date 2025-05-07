@@ -1,7 +1,8 @@
 #!/usr/bin/env python
+import av
 import math
-import time
 import random
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -82,13 +83,26 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def rollout(env: gym.vector.AsyncVectorEnv, policy: DiffusionPolicy, seeds: list[int]) -> dict:
+def rollout(env: gym.vector.AsyncVectorEnv, policy: DiffusionPolicy, seeds: list[int], output_paths: list[Path]) -> dict:
     observation: np.ndarray
     reward: np.ndarray
 
     device = torch.device(policy.config.device)
     policy.reset()
     observation, info = env.reset(seed=seeds)
+
+    containers = []
+    streams = []
+    for output_path in output_paths:
+        width, height, fps = 320, 240, 30
+        container = av.open(str(output_path), mode='w')
+        stream = container.add_stream('h264', rate=fps)
+        stream.width = width
+        stream.height = height
+        stream.pix_fmt = 'yuv420p'
+        stream.codec_context.options = {'crf': '23', 'g': '30'}
+        containers.append(container)
+        streams.append(stream)
 
     all_actions = []
     all_rewards = []
@@ -105,6 +119,11 @@ def rollout(env: gym.vector.AsyncVectorEnv, policy: DiffusionPolicy, seeds: list
         action_tensor = policy.select_action({'observation.image': observation_tensor})
         action = {k.removeprefix("action."): v.cpu().numpy() for k, v in action_tensor.items()}
 
+        if output_paths:
+            for frame, container, stream in zip(observation, containers, streams, strict=True):
+                packet = stream.encode(av.VideoFrame.from_ndarray(frame.astype(np.uint8), format='rgb24'))
+                container.mux(packet)
+
         observation, reward, terminated, truncated, info = env.step(action)
         done = terminated | truncated | done
         success = success | info['success']
@@ -117,6 +136,11 @@ def rollout(env: gym.vector.AsyncVectorEnv, policy: DiffusionPolicy, seeds: list
         running_success_rate = einops.reduce(torch.stack(all_successes, dim=1), "b n -> b", "any").numpy().mean()
         progbar.set_postfix({"running_success_rate": f"{running_success_rate.item() * 100:.1f}%"})
         progbar.update()
+
+    for container, stream in zip(containers, streams, strict=True):
+        packet = stream.encode(None)
+        container.mux(packet)
+        container.close()
 
     return {
         "action": {key: torch.stack([action[key] for action in all_actions], dim=1) for key in all_actions[0].keys()},
@@ -135,6 +159,9 @@ def eval_policy(config: EvalConfig, policy: DiffusionPolicy) -> dict:
     start_seed = config.seed
     num_episodes = config.num_episodes
     n_batches = int(math.ceil(num_episodes / env.num_envs))
+    if config.output_dir:
+        config.output_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Saving videos to {config.output_dir}")
 
     # Keep track of some metrics.
     sum_rewards = []
@@ -143,8 +170,10 @@ def eval_policy(config: EvalConfig, policy: DiffusionPolicy) -> dict:
     all_seeds = []
 
     for batch_idx in range(n_batches):
-        seeds = list(range(start_seed + (batch_idx * env.num_envs), start_seed + ((batch_idx + 1) * env.num_envs)))
-        rollout_data = rollout(env, policy, seeds=seeds)
+        start_idx, end_idx = batch_idx * env.num_envs, (batch_idx + 1) * env.num_envs
+        output_paths = [config.output_dir / f"episode_{i}.mp4" for i in range(start_idx, end_idx)] if config.output_dir else []
+        seeds = list(range(start_seed + start_idx, start_seed + end_idx))
+        rollout_data = rollout(env, policy, seeds=seeds, output_paths=output_paths)
 
         # Figure out where in each rollout sequence the first done condition was encountered (results after this won't be included).
         n_steps = rollout_data["done"].shape[1]
