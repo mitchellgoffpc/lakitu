@@ -3,21 +3,20 @@
 set -e
 cd $(dirname "$0")
 
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    SO_EXT="dylib"
-    SO_EXT_VERSION=$SO_EXT
-else
-    SO_EXT="so"
-    SO_EXT_VERSION="$SO_EXT.2.0.0"
-fi
-
 echo "Building mupen64plus-core"
 cd mupen64plus-core/projects/unix
-sed -i.bak 's/^  LDLIBS += -lopcodes -lbfd/  # LDLIBS += -lopcodes -lbfd/' Makefile  # libopcodes and libbfd aren't needed for what we're doing
 make clean
-make all DEBUGGER=1
-mv "libmupen64plus.$SO_EXT_VERSION" "../../../libmupen64plus.$SO_EXT"
-mv Makefile.bak Makefile
+
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    sed -i.bak 's/^  LDLIBS += -lopcodes -lbfd/  # LDLIBS += -lopcodes -lbfd/' Makefile  # libopcodes and libbfd aren't needed on macOS
+    make all DEBUGGER=1
+    mv Makefile.bak Makefile
+    mv libmupen64plus.dylib ../../../libmupen64plus.dylib
+else
+    make all DEBUGGER=1
+    mv libmupen64plus.so.2.0.0 ../../../libmupen64plus.so
+fi
+
 cp ../../data/font.ttf ../../../
 make clean
 cd ../../../
