@@ -12,13 +12,16 @@ authors = [
     {name = "Mitchell Goff", email = "mitchellgoffpc@gmail.com"}
 ]
 dependencies = [
+    "av",
+    "einops",
     "glfw",
     "gymnasium",
     "numpy",
-    "av",
+    "omegaconf",
+    "safetensors",
     "torch",
     "torchvision",
-    "einops",
+    "tqdm",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +29,9 @@ dev = [
     "ruff",
     "mypy",
     "pytest",
+    "opencv-python",
+    "pygame",
+    "wandb",
 ]
 
 [tool.ruff]
