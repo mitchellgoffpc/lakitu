@@ -139,7 +139,7 @@ def encode(data_queue, savestate_path):
     stream = container.add_stream('h264', rate=fps)
     stream.width = width
     stream.height = height
-    stream.pix_fmt = 'yuv420p'  # Common pixel format for H.264
+    stream.pix_fmt = 'yuv420p'
     stream.codec_context.options = {'crf': '23', 'g': '30'}
 
     # Header should follow the spec defined in lakitu/datasets/dataset.py

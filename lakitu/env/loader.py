@@ -51,6 +51,16 @@ def _environ_path(name):
     else:
         return []
 
+def get_dll_ext():
+    if sys.platform.startswith("linux") or "bsd" in sys.platform:
+        return "so"
+    elif sys.platform == "darwin":
+        return "dylib"
+    elif sys.platform == "win32":
+        return "dll"
+    else:
+        raise RuntimeError("Unrecognized platform")
+
 
 class LibraryLoader:
     def __init__(self):

@@ -1,3 +1,4 @@
+import sys
 import glfw
 import ctypes as C
 import numpy as np
@@ -7,10 +8,9 @@ from lakitu.env.defs import ErrorType, PluginType, RenderMode, ControllerPluginT
 from lakitu.env.defs import VidExtFuncs, InputExtFuncs, M64pButtons, M64pVideoExtension, M64pInputExtension
 
 class VideoExtension:
-    """Mupen64Plus video extension"""
+    """Mupen64Plus video extension that allows us to render to a glfw window."""
 
     def __init__(self, input_extension, offscreen=False):
-        """Constructor."""
         self.window = None
         self.input_extension = input_extension
         self.offscreen = offscreen
@@ -76,7 +76,9 @@ class VideoExtension:
             glfw.window_hint(glfw.ALPHA_BITS, self.gl_alpha_size)
             glfw.window_hint(glfw.SAMPLES, self.gl_multisample_samples)
             glfw.window_hint(glfw.DOUBLEBUFFER, self.gl_doublebuffer)
-            glfw.window_hint(glfw.COCOA_RETINA_FRAMEBUFFER, glfw.FALSE)
+            if sys.platform == "darwin":
+                glfw.window_hint(glfw.COCOA_RETINA_FRAMEBUFFER, glfw.FALSE)
+                glfw.window_hint(glfw.COCOA_MENUBAR, glfw.FALSE if self.offscreen else glfw.TRUE)
 
             # Create a window
             self.window = glfw.create_window(640, 480, "M64Py", None, None)
@@ -100,6 +102,7 @@ class VideoExtension:
         return self.init()
 
     def quit(self):
+        """Destroy the GLFW window."""
         if self.render_mode == RenderMode.OPENGL:
             if self.window:
                 glfw.destroy_window(self.window)
@@ -119,6 +122,7 @@ class VideoExtension:
         return ErrorType.SUCCESS
 
     def set_mode(self, width, height, bits, mode, flags):
+        """Set the video mode for the emulator rendering window. """
         if self.render_mode == RenderMode.OPENGL:
             glfw.set_window_size(self.window, width, height)
             if not self.offscreen:
@@ -132,7 +136,7 @@ class VideoExtension:
 
     def set_caption(self, title):
         """Set the caption text of the emulator rendering window. """
-        title_str = "M64Py :: %s" % title.decode()
+        title_str = f"M64Py :: {title.decode()}"
         if self.window:
             glfw.set_window_title(self.window, title_str)
         return ErrorType.SUCCESS
@@ -153,7 +157,7 @@ class VideoExtension:
         if addr:
             return addr
         else:
-            log.warn("VidExtFuncGLGetProc: '%s'" % proc_str)
+            log.warning(f"VidExtFuncGLGetProc: '{proc_str}'")
             return 0
 
     def gl_set_attr(self, attr, value):
@@ -250,22 +254,27 @@ class VideoExtension:
         return ErrorType.SUCCESS
 
     def gl_get_default_framebuffer(self):
+        """Get the default framebuffer for OpenGL rendering."""
         if self.render_mode != RenderMode.OPENGL:
             return 0
         return 0  # GLFW uses the default framebuffer (0)
 
     def vk_get_surface(self, a, b):
+        """Get the Vulkan surface for rendering."""
         if self.render_mode != RenderMode.VULKAN:
             return ErrorType.INVALID_STATE
         return ErrorType.SUCCESS
 
     def vk_get_instance_extensions(self, a, b):
+        """Get the Vulkan instance extensions for rendering."""
         if self.render_mode != RenderMode.VULKAN:
             return ErrorType.INVALID_STATE
         return ErrorType.SUCCESS
 
 
 class InputExtension:
+    """Mupen64Plus input extension that allows us to control the observation/action loop."""
+
     def __init__(self, core, data_queue=None, savestate_path=None, info_hooks=None):
         self.window = None
         self.core = core
@@ -285,6 +294,7 @@ class InputExtension:
         self.gfx, *_ = self.core.plugin_map[PluginType.GFX]
 
     def initiate_controllers(self, control_info):
+        """Callback to set up the controller information for the input plugin."""
         control_info.Controls[0].Present = 1
         control_info.Controls[0].Plugin = ControllerPluginType.MEMPAK
         control_info.Controls[1].Present = 0
@@ -295,18 +305,22 @@ class InputExtension:
         control_info.Controls[3].Plugin = ControllerPluginType.NONE
 
     def get_keys(self, controller, buttons):
+        """Callback to get the current state of the controller buttons for a single controller."""
         if not self.controller_states:
             self.controller_states = self.get_controller_states()
         for field, *_ in M64pButtons._fields_:
             setattr(buttons.contents, field, getattr(self.controller_states[controller], field))
 
     def get_controller_states(self):
+        """Get the current state of the controller buttons for all controllers, by using GLFW key callbacks, polling gamepad state, etc."""
         raise NotImplementedError("get_controller_states() must be implemented in a subclass")
 
     def get_info(self):
+        """Get the current state of the controller buttons."""
         return {name: hook(self.core) for name, hook in (self.info_hooks or {}).items()}
 
     def render_callback(self):
+        """Callback that gets called every time a frame is rendered. This is where we read the framebuffer, process GLFW events, etc."""
         if not self.window:
             return
         if glfw.window_should_close(self.window):

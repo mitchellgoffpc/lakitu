@@ -83,6 +83,9 @@ class N64Env(gym.Env):
             'buttons': gym.spaces.MultiBinary(14),
         })
 
+        if savestate_path and not savestate_path.exists():
+            raise FileNotFoundError(f"Could not read savestate file at {savestate_path}")
+
     def _start_emulator(self):
         """Start the emulator in a separate process"""
         if self.emulator_proc is not None and self.emulator_proc.is_alive():

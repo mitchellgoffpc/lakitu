@@ -22,8 +22,7 @@ import ctypes as C
 import logging as log
 from pathlib import Path
 
-from lakitu.env.loader import load, unload_library
-from lakitu.env.platforms import DLL_EXT
+from lakitu.env.loader import load, unload_library, get_dll_ext
 from lakitu.env.defs import LogLevel, ErrorType, PluginType, CoreFlags, CoreState, CoreCommand, EmulationState
 from lakitu.env.defs import M64pRomHeader, M64pRomSettings
 
@@ -48,10 +47,10 @@ PLUGIN_NAMES = {
 }
 
 PLUGIN_PATHS = {
-    PluginType.RSP: "mupen64plus-rsp-hle%s" % DLL_EXT,
-    PluginType.GFX: "mupen64plus-video-GLideN64%s" % DLL_EXT,
-    PluginType.AUDIO: "mupen64plus-audio-sdl%s" % DLL_EXT,
-    PluginType.INPUT: "mupen64plus-input-ext%s" % DLL_EXT
+    PluginType.RSP: f"mupen64plus-rsp-hle.{get_dll_ext()}",
+    PluginType.GFX: f"mupen64plus-video-GLideN64.{get_dll_ext()}",
+    PluginType.AUDIO: f"mupen64plus-audio-sdl.{get_dll_ext()}",
+    PluginType.INPUT: f"mupen64plus-input-ext.{get_dll_ext()}",
 }
 
 SKIP_MESSAGES = [
@@ -65,17 +64,13 @@ DEBUGFUNC = C.CFUNCTYPE(None, C.c_char_p, C.c_int, C.c_char_p)
 STATEFUNC = C.CFUNCTYPE(None, C.c_char_p, C.c_int, C.c_int)
 
 def version_split(ver):
-    return "%d.%d.%d" % (
-        ((ver >> 16) & 0xffff),
-        ((ver >> 8) & 0xff),
-        (ver & 0xff))
+    return f"{(ver >> 16) & 0xffff}.{(ver >> 8) & 0xff}.{ver & 0xff}"
 
 
 class Core:
-    """Mupen64Plus Core library"""
+    """Core class to manage the Mupen64Plus emulator core and its plugins."""
 
     def __init__(self, log_level=LogLevel.INFO):
-        """Constructor."""
         self.plugins = []
         self.plugin_map = {}
         self.inputext = None
@@ -83,7 +78,7 @@ class Core:
         self.rom_length = None
         self.rom_header = M64pRomHeader()
         self.rom_settings = M64pRomSettings()
-        self.core_path = str(CORE_LIB_PATH / 'libmupen64plus.dylib')
+        self.core_path = str(CORE_LIB_PATH / f'libmupen64plus.{get_dll_ext()}')
         self.core_name = "Mupen64Plus Core"
         self.core_version = ""
         self.log_level = log_level
@@ -99,45 +94,33 @@ class Core:
             plugin_type, plugin_version, plugin_api, plugin_name, plugin_cap = version
             if plugin_type != PluginType.CORE:
                 raise Exception(
-                    "library '%s' is invalid, "
-                    "this is not the emulator core." % (
-                        os.path.basename(self.core_path)))
+                    f"library '{os.path.basename(self.core_path)}' is invalid, this is not the emulator core.")
             elif plugin_version < MINIMUM_CORE_VERSION:
                 raise Exception(
-                    "library '%s' is incompatible, "
-                    "core version %s is below minimum supported %s." % (
-                        os.path.basename(self.core_path),
-                        version_split(plugin_version),
-                        version_split(MINIMUM_CORE_VERSION)))
+                    f"library '{os.path.basename(self.core_path)}' is incompatible, "
+                    f"core version {version_split(plugin_version)} is below minimum supported {version_split(MINIMUM_CORE_VERSION)}.")
             elif plugin_api & 0xffff0000 != CORE_API_VERSION & 0xffff0000:
                 raise Exception(
-                    "library '%s' is incompatible, "
-                    "core API major version %s doesn't match application (%s)." % (
-                        os.path.basename(self.core_path),
-                        version_split(plugin_version),
-                        version_split(CORE_API_VERSION)))
+                    f"library '{os.path.basename(self.core_path)}' is incompatible, "
+                    f"core API major version {version_split(plugin_version)} doesn't match application: "
+                    f"({version_split(CORE_API_VERSION)}).")
             else:
                 config_ver, debug_ver, vidext_ver = self.get_api_versions()
                 if config_ver & 0xffff0000 != CONFIG_API_VERSION & 0xffff0000:
                     raise Exception(
-                        "emulator core '%s' is incompatible, "
-                        "config API major version %s doesn't match application: (%s)" % (
-                        os.path.basename(self.core_path),
-                        version_split(config_ver),
-                        version_split(CONFIG_API_VERSION)))
+                        f"emulator core '{os.path.basename(self.core_path)}' is incompatible, "
+                        f"config API major version {version_split(config_ver)} doesn't match application: "
+                        f"({version_split(CONFIG_API_VERSION)})")
                 if vidext_ver & 0xffff0000 != VIDEXT_API_VERSION & 0xffff0000:
                     raise Exception(
-                        "emulator core '%s' is incompatible, "
-                        "vidext API major version %s doesn't match application: (%s)" % (
-                            os.path.basename(self.core_path),
-                            version_split(config_ver),
-                            version_split(CONFIG_API_VERSION)))
+                        f"emulator core '{os.path.basename(self.core_path)}' is incompatible, "
+                        f"vidext API major version {version_split(config_ver)} doesn't match application: "
+                        f"({version_split(CONFIG_API_VERSION)})")
 
                 self.core_name = plugin_name
                 self.core_version = plugin_version
 
-                log.info("attached to library '%s' version %s" %
-                        (self.core_name, version_split(self.core_version)))
+                log.info(f"attached to library '{self.core_name}' version {version_split(self.core_version)}")
                 if plugin_cap & CoreFlags.DYNAREC:
                     log.info("includes support for Dynamic Recompiler.")
                 if plugin_cap & CoreFlags.DEBUGGER:
@@ -146,23 +129,23 @@ class Core:
                     log.info("includes support for r4300 Core Comparison.")
 
     def error_message(self, return_code):
-        """Returns description of the error"""
+        """Returns a human-readable error message for the given return code."""
         self.m64p.CoreErrorMessage.restype = C.c_char_p
-        rval = self.m64p.CoreErrorMessage(return_code).decode()
-        return rval
+        return self.m64p.CoreErrorMessage(return_code).decode()
 
     def handle_log_message(self, context, level, message):
+        """Callback to handle log messages from the core."""
         if any(context.decode() == ctx and message.decode().startswith(msg) for ctx, msg in SKIP_MESSAGES):
             return
         if self.log_level >= level:
-            sys.stderr.write("%s: %s\n" % (context.decode(), message.decode()))
+            sys.stderr.write(f"{context.decode()}: {message.decode()}\n")
 
     def handle_state_update(self, context, param, value):
+        """Callback to handle state updates from the core."""
         pass
 
     def core_startup(self, vidext=None, inputext=None):
-        """Initializes libmupen64plus for use by allocating memory,
-        creating data structures, and loading the configuration file."""
+        """Initializes libmupen64plus and attaches the video extension."""
         rval = self.m64p.CoreStartup(
             C.c_int(CORE_API_VERSION), C.c_char_p(str(CORE_LIB_PATH).encode()), C.c_char_p(str(CORE_LIB_PATH).encode()),
             C.c_char_p(b"Core"), self.logging_callback, C.c_char_p(b"State"), self.state_callback)
@@ -172,17 +155,16 @@ class Core:
                 self.override_vidext(vidext)
         else:
             log.debug("core_startup()")
-            log.warn("error starting '%s' library" % self.core_name)
+            log.warning(f"error starting '{self.core_name}' library")
 
     def core_shutdown(self):
-        """Saves the config file, then destroys
-        data structures and releases allocated memory."""
+        """Shuts down the core and unloads the library."""
         if self.m64p:
             self.m64p.CoreShutdown()
         return ErrorType.SUCCESS
 
     def plugin_get_version(self, handle, path):
-        """Retrieves version information from the plugin."""
+        """Returns the plugin version information."""
         try:
             type_ptr = C.pointer(C.c_int())
             ver_ptr = C.pointer(C.c_int())
@@ -193,11 +175,10 @@ class Core:
                 type_ptr, ver_ptr, api_ptr, name_ptr, cap_ptr)
         except AttributeError:
             unload_library(handle)
-            log.warn("library '%s' is invalid, no PluginGetVersion() function found." % (
-                os.path.basename(path)))
+            log.warning(f"library '{os.path.basename(path)}' is invalid, no PluginGetVersion() function found.")
         except OSError as err:
             log.debug("plugin_get_version()")
-            log.warn(str(err))
+            log.warning(str(err))
         else:
             if rval == ErrorType.SUCCESS:
                 assert name_ptr.contents.value is not None
@@ -206,31 +187,30 @@ class Core:
                     name_ptr.contents.value.decode(), cap_ptr.contents.value)
             else:
                 log.debug("plugin_get_version()")
-                log.warn(self.error_message(rval))
+                log.warning(self.error_message(rval))
         return None
 
     def get_api_versions(self):
-        """Retrieves API version information from the core library."""
+        """Returns the API versions of the core."""
         config_ver_ptr = C.pointer(C.c_int())
         debug_ver_ptr = C.pointer(C.c_int())
         vidext_ver_ptr = C.pointer(C.c_int())
-        rval = self.m64p.CoreGetAPIVersions(
-            config_ver_ptr, debug_ver_ptr, vidext_ver_ptr, None)
+        rval = self.m64p.CoreGetAPIVersions(config_ver_ptr, debug_ver_ptr, vidext_ver_ptr, None)
         if rval == ErrorType.SUCCESS:
             return config_ver_ptr.contents.value, debug_ver_ptr.contents.value, vidext_ver_ptr.contents.value
         else:
             log.debug("get_api_versions()")
-            log.warn(self.error_message(rval))
+            log.warning(self.error_message(rval))
             return None
 
     def load_plugins(self):
-        """Loads and starts all plugins."""
+        """Loads and initializes all of the plugins."""
         for plugin_type, plugin_path in PLUGIN_PATHS.items():
             self.plugin_load(CORE_LIB_PATH / plugin_path)
             self.plugin_startup(plugin_type)
 
     def plugin_load(self, plugin_path):
-        """Loads plugins and maps them by plugin type."""
+        """Loads the given plugin library and retrieves its version information."""
         try:
             plugin_handle = C.cdll.LoadLibrary(plugin_path)
             version = self.plugin_get_version(plugin_handle, plugin_path)
@@ -240,30 +220,30 @@ class Core:
         except OSError as e:
             log.debug("plugin_load()")
             plugin_path = plugin_path.encode('ascii').decode('ascii', 'ignore')
-            log.error("failed to load plugin %s: %s" % (plugin_path, e))
+            log.error(f"failed to load plugin {plugin_path}: {e}")
 
     def plugin_startup(self, plugin_type):
-        """This function initializes plugin for use by allocating memory, creating data structures, and loading the configuration data."""
+        """Initializes the specified plugin and sets up the logging callback."""
         plugin_handle, _, plugin_name, plugin_desc, _ = self.plugin_map[plugin_type]
         rval = plugin_handle.PluginStartup(C.c_void_p(self.m64p._handle), plugin_name, self.logging_callback)
         if rval != ErrorType.SUCCESS:
             log.debug("plugin_startup()")
-            log.warn(self.error_message(rval))
-            log.warn("%s failed to start." % plugin_desc)
+            log.warning(self.error_message(rval))
+            log.warning(f"{plugin_desc} failed to start.")
         elif plugin_type == PluginType.INPUT and self.inputext:
             self.override_inputext(self.inputext)
 
     def plugin_shutdown(self, plugin_type):
-        """This function destroys data structures and releases memory allocated by the plugin library. """
+        """Shuts down the specified plugin and unloads it."""
         plugin_handle, _, _, plugin_desc, _ = self.plugin_map[plugin_type]
         rval = plugin_handle.PluginShutdown()
         if rval != ErrorType.SUCCESS:
             log.debug("plugin_shutdown()")
-            log.warn(self.error_message(rval))
-            log.warn("%s failed to stop." % plugin_desc)
+            log.warning(self.error_message(rval))
+            log.warning(f"{plugin_desc} failed to stop.")
 
     def attach_plugins(self, plugin_types):
-        """Attaches plugins to the emulator core."""
+        """Attaches the specified plugins to the core."""
         self.plugins = plugin_types
         for plugin_type in plugin_types:
             plugin_handle, plugin_path, plugin_name, plugin_desc, plugin_version = self.plugin_map[plugin_type]
@@ -271,24 +251,24 @@ class Core:
             rval = self.m64p.CoreAttachPlugin(C.c_int(plugin_type), C.c_void_p(plugin_handle._handle))
             if rval != ErrorType.SUCCESS:
                 log.debug("attach_plugins()")
-                log.warn(self.error_message(rval))
-                log.warn("core failed to attach %s plugin." % (plugin_name))
+                log.warning(self.error_message(rval))
+                log.warning(f"core failed to attach {plugin_name} plugin.")
             else:
-                log.info("using %s plugin: '%s' v%s" % (plugin_name.decode(), plugin_desc, version_split(plugin_version)))
+                log.info(f"using {plugin_name.decode()} plugin: '{plugin_desc}' v{version_split(plugin_version)}")
 
     def detach_plugins(self):
-        """Detaches plugins from the emulator core, and re-attaches the 'dummy' plugin functions."""
+        """Detaches all plugins from the core."""
         for plugin_type in self.plugins:
             plugin_handle, plugin_path, plugin_name, plugin_desc, plugin_version = self.plugin_map[plugin_type]
 
             rval = self.m64p.CoreDetachPlugin(plugin_type)
             if rval != ErrorType.SUCCESS:
                 log.debug("detach_plugins()")
-                log.warn(self.error_message(rval))
-                log.warn("core failed to detach %s plugin." % (plugin_name))
+                log.warning(self.error_message(rval))
+                log.warning(f"core failed to detach {plugin_name} plugin.")
 
     def rom_open(self, romfile):
-        """Reads in a binary ROM image"""
+        """Opens the specified ROM file and initializes the core."""
         self.rom_length = len(romfile)
         self.rom_type = ROM_TYPE[binascii.hexlify(romfile[:4])]
         romlength = C.c_int(self.rom_length)
@@ -296,17 +276,17 @@ class Core:
         rval = self.m64p.CoreDoCommand(CoreCommand.ROM_OPEN, romlength, C.byref(rombuffer))
         if rval != ErrorType.SUCCESS:
             log.debug("rom_open()")
-            log.warn(self.error_message(rval))
+            log.warning(self.error_message(rval))
             log.error("core failed to open ROM file.")
         del rombuffer
         return rval
 
     def rom_close(self):
-        """Closes any currently open ROM."""
+        """Closes the currently open ROM file."""
         rval = self.m64p.CoreDoCommand(CoreCommand.ROM_CLOSE)
         if rval != ErrorType.SUCCESS:
             log.debug("rom_close()")
-            log.warn(self.error_message(rval))
+            log.warning(self.error_message(rval))
             log.error("core failed to close ROM image file.")
         return rval
 
@@ -318,7 +298,7 @@ class Core:
             C.pointer(self.rom_header))
         if rval != ErrorType.SUCCESS:
             log.debug("rom_get_header()")
-            log.warn("core failed to get ROM header.")
+            log.warning("core failed to get ROM header.")
         return rval
 
     def rom_get_settings(self):
@@ -326,14 +306,14 @@ class Core:
         rval = self.m64p.CoreDoCommand(CoreCommand.ROM_GET_SETTINGS, C.c_int(C.sizeof(self.rom_settings)), C.pointer(self.rom_settings))
         if rval != ErrorType.SUCCESS:
             log.debug("rom_get_settings()")
-            log.warn("core failed to get ROM settings.")
+            log.warning("core failed to get ROM settings.")
         return rval
 
     def execute(self):
         """Starts the emulator and begin executing the ROM image."""
         rval = self.m64p.CoreDoCommand(CoreCommand.EXECUTE, 0, None)
         if rval != ErrorType.SUCCESS:
-            log.warn(self.error_message(rval))
+            log.warning(self.error_message(rval))
         return rval
 
     def stop(self):
@@ -341,7 +321,7 @@ class Core:
         rval = self.m64p.CoreDoCommand(CoreCommand.STOP, 0, None)
         if rval != ErrorType.SUCCESS:
             log.debug("stop()")
-            log.warn(self.error_message(rval))
+            log.warning(self.error_message(rval))
         return rval
 
     def pause(self):
@@ -349,7 +329,7 @@ class Core:
         rval = self.m64p.CoreDoCommand(CoreCommand.PAUSE, 0, None)
         if rval != ErrorType.SUCCESS:
             log.debug("pause()")
-            log.warn(self.error_message(rval))
+            log.warning(self.error_message(rval))
         return rval
 
     def resume(self):
@@ -357,7 +337,7 @@ class Core:
         rval = self.m64p.CoreDoCommand(CoreCommand.RESUME, 0, None)
         if rval != ErrorType.SUCCESS:
             log.debug("resume()")
-            log.warn(self.error_message(rval))
+            log.warning(self.error_message(rval))
         return rval
 
     def core_state_query(self, state):
@@ -366,7 +346,7 @@ class Core:
         rval = self.m64p.CoreDoCommand(CoreCommand.CORE_STATE_QUERY, C.c_int(state), state_ptr)
         if rval != ErrorType.SUCCESS:
             log.debug("core_state_query()")
-            log.warn(self.error_message(rval))
+            log.warning(self.error_message(rval))
         return state_ptr.contents.value
 
     def core_state_set(self, state, value):
@@ -376,10 +356,11 @@ class Core:
             CoreCommand.CORE_STATE_SET, C.c_int(state), value_ptr)
         if rval != ErrorType.SUCCESS:
             log.debug("core_state_set()")
-            log.warn(self.error_message(rval))
+            log.warning(self.error_message(rval))
         return value_ptr.contents.value
 
     def core_mem_read(self, address, size):
+        """Reads a block of memory from the emulator core."""
         dwords = []
         for _ in range(0, size, 4):
             rval = self.m64p.DebugMemRead32(C.c_uint(address))
@@ -393,7 +374,7 @@ class Core:
             CoreCommand.STATE_LOAD, C.c_int(1), path)
         if rval != ErrorType.SUCCESS:
             log.debug("state_load()")
-            log.warn(self.error_message(rval))
+            log.warning(self.error_message(rval))
         return rval
 
     def state_save(self, state_path=None, state_type=1):
@@ -402,7 +383,7 @@ class Core:
         rval = self.m64p.CoreDoCommand(CoreCommand.STATE_SAVE, C.c_int(state_type), path)
         if rval != ErrorType.SUCCESS:
             log.debug("state_save()")
-            log.warn(self.error_message(rval))
+            log.warning(self.error_message(rval))
         return rval
 
     def state_set_slot(self, slot):
@@ -410,7 +391,7 @@ class Core:
         rval = self.m64p.CoreDoCommand(CoreCommand.STATE_SET_SLOT, C.c_int(slot))
         if rval != ErrorType.SUCCESS:
             log.debug("state_set_slot()")
-            log.warn(self.error_message(rval))
+            log.warning(self.error_message(rval))
         return rval
 
     def reset(self, soft=False):
@@ -418,7 +399,7 @@ class Core:
         rval = self.m64p.CoreDoCommand(CoreCommand.RESET, C.c_int(int(soft)))
         if rval != ErrorType.SUCCESS:
             log.debug("reset()")
-            log.warn(self.error_message(rval))
+            log.warning(self.error_message(rval))
         return rval
 
     def advance_frame(self):
@@ -426,7 +407,7 @@ class Core:
         rval = self.m64p.CoreDoCommand(CoreCommand.ADVANCE_FRAME, C.c_int(), C.c_int())
         if rval != ErrorType.SUCCESS:
             log.debug("advance_frame()")
-            log.warn(self.error_message(rval))
+            log.warning(self.error_message(rval))
         return rval
 
     def toggle_pause(self):
@@ -467,17 +448,18 @@ class Core:
         rval = self.m64p.CoreOverrideVidExt(C.pointer(vidext.extension))
         if rval != ErrorType.SUCCESS:
             log.debug("override_vidext()")
-            log.warn(self.error_message(rval))
+            log.warning(self.error_message(rval))
         else:
             log.info("video extension enabled")
         return rval
 
     def override_inputext(self, inputext):
+        """Overrides the input plugin's callbacks."""
         plugin_handle, *_ = self.plugin_map[PluginType.INPUT]
         rval = plugin_handle.OverrideInputExt(C.pointer(inputext.extension))
         if rval != ErrorType.SUCCESS:
             log.debug("override_inputext()")
-            log.warn(self.error_message(rval))
+            log.warning(self.error_message(rval))
         else:
             log.info("input extension enabled")
         return rval
