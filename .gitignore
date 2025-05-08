@@ -15,4 +15,5 @@ dist
 
 # data
 lakitu/data
+lakitu/experiments
 *.z64
