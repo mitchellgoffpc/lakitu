@@ -8,13 +8,13 @@ from typing import Any, Union, Iterator
 
 import torch
 from torch.optim import Optimizer
-from omegaconf import OmegaConf
 
 from lakitu.datasets.dataset import EpisodeDataset
+from lakitu.training.helpers import BaseConfig
 from lakitu.training.eval import EvalConfig, eval_policy, set_seed
 from lakitu.training.models.diffusion import DiffusionConfig, DiffusionPolicy
 
-OUTPUT_DIR = Path(__file__).parents[2] / "output/train"
+OUTPUT_DIR = Path(__file__).parents[1] / "experiments"
 LRScheduler = Any
 
 @dataclass
@@ -61,7 +61,7 @@ class LRSchedulerConfig:
     num_warmup_steps: int = 500
 
 @dataclass
-class TrainConfig:
+class TrainConfig(BaseConfig):
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
     policy: DiffusionConfig = field(default_factory=DiffusionConfig)
     # Set `dir` to where you would like to save all of the run outputs. If you run another training session
@@ -82,17 +82,6 @@ class TrainConfig:
     scheduler: LRSchedulerConfig = field(default_factory=LRSchedulerConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
     wandb: WandBConfig = field(default_factory=WandBConfig)
-
-    @classmethod
-    def create(cls, *args: Any, **kwargs: Any) -> "TrainConfig":
-        schema = OmegaConf.structured(cls)
-        config = OmegaConf.merge(schema, *args, kwargs)
-        result: TrainConfig = OmegaConf.to_object(config)  # type: ignore
-        return result
-
-    @classmethod
-    def from_cli(cls, **kwargs: Any) -> "TrainConfig":
-        return cls.create(OmegaConf.from_cli(), kwargs)
 
 
 def flatten_dict(d: dict, parent_key: str = "", sep: str = "/") -> dict:
@@ -287,7 +276,7 @@ def save_checkpoint(
     pretrained_dir.mkdir(parents=True, exist_ok=True)
     safetensors.torch.save_file(policy.state_dict(), str(pretrained_dir / "model.safetensors"))
     with open(pretrained_dir / "train_config.json", "w") as f:
-        json.dump(asdict(cfg), f, indent=2)
+        json.dump(asdict(cfg), f, indent=2, default=lambda x: str(x) if isinstance(x, Path) else x)
 
     save_dir = checkpoint_dir / 'training_state'
     save_dir.mkdir(parents=True, exist_ok=True)

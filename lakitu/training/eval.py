@@ -12,10 +12,10 @@ import gymnasium as gym
 import numpy as np
 import torch
 from tqdm import trange
-from omegaconf import OmegaConf
 
 from lakitu.env.gym import N64Env, m64_get_level
-from lakitu.training.models.diffusion import DiffusionConfig, DiffusionPolicy
+from lakitu.training.helpers import BaseConfig
+from lakitu.training.models.diffusion import DiffusionPolicy
 
 @dataclass
 class EnvConfig:
@@ -43,21 +43,9 @@ class EvalConfig:
     seed: int = 1000
 
 @dataclass
-class EvalPolicyConfig:
+class EvalPolicyConfig(BaseConfig):
+    policy_path: Path
     eval: EvalConfig = field(default_factory=EvalConfig)
-    policy: DiffusionConfig = field(default_factory=DiffusionConfig)
-    policy_path: Path | None = None
-
-    @classmethod
-    def create(cls, *args: Any) -> "EvalPolicyConfig":
-        schema = OmegaConf.structured(cls)
-        config = OmegaConf.merge(schema, *args)
-        result: EvalPolicyConfig = OmegaConf.to_object(config)  # type: ignore
-        return result
-
-    @classmethod
-    def from_cli(cls) -> "EvalPolicyConfig":
-        return cls.create(OmegaConf.from_cli())
 
 
 class Mario64Env(N64Env):
@@ -207,14 +195,11 @@ def eval_policy(config: EvalConfig, policy: DiffusionPolicy) -> dict:
 
 
 def eval_main(config: EvalPolicyConfig) -> None:
-    device = torch.device(config.policy.device)
     torch.backends.cudnn.benchmark = True
     torch.backends.cuda.matmul.allow_tf32 = True
     set_seed(config.eval.seed)
 
-    policy = DiffusionPolicy(config.policy).to(device)
-    # policy = DiffusionPolicy.from_pretrained(config.policy, config.policy_path)
-
+    policy = DiffusionPolicy.from_pretrained(config.policy_path)
     info = eval_policy(config.eval, policy)
     print(info["aggregated"])
 
