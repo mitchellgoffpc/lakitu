@@ -65,7 +65,7 @@ class N64Env(gym.Env):
     def __init__(self, rom_path, savestate_path=None, render_mode=None, info_hooks=None):
         super().__init__()
         self.rom_path = str(rom_path)
-        self.savestate_path = str(savestate_path) if savestate_path else None
+        self.savestate_path = Path(savestate_path) if savestate_path else None
         self.render_mode = render_mode
         self.info_hooks = info_hooks
         self.emulator_proc = None
@@ -83,7 +83,7 @@ class N64Env(gym.Env):
             'buttons': gym.spaces.MultiBinary(14),
         })
 
-        if savestate_path and not savestate_path.exists():
+        if self.savestate_path and not self.savestate_path.exists():
             raise FileNotFoundError(f"Could not read savestate file at {savestate_path}")
 
     def _start_emulator(self):
@@ -93,7 +93,7 @@ class N64Env(gym.Env):
 
         self.emulator_proc = self.ctx.Process(
             target=emulator_process,
-            args=(self.rom_path, self.savestate_path, self.input_queue, self.data_queue, self.info_hooks),
+            args=(self.rom_path, str(self.savestate_path), self.input_queue, self.data_queue, self.info_hooks),
             daemon=True
         )
         self.emulator_proc.start()
@@ -176,9 +176,15 @@ def m64_get_level(core):
 if __name__ == "__main__":
     import argparse
     import pygame
+    import einops
+    import torch
+    import cv2
+    from lakitu.training.models.diffusion import DiffusionPolicy
+
     parser = argparse.ArgumentParser(description='Run N64 Gym Environment')
     parser.add_argument('rom_path', type=str, help='Path to the ROM file')
     parser.add_argument('-s', '--savestate', type=str, default=None, help='Path to save state file')
+    parser.add_argument('-p', '--policy', type=str, default=None, help='Path to the policy file')
     args = parser.parse_args()
 
     # Initialize Pygame
@@ -190,17 +196,26 @@ if __name__ == "__main__":
     env = N64Env(args.rom_path, args.savestate, render_mode="rgb_array")
     observation, info = env.reset()
 
+    if args.policy:
+        policy = DiffusionPolicy.from_pretrained(Path(args.policy))
+        policy.reset()
+
     running = True
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
 
-        # Random action
-        action = {
-            'joystick': np.random.uniform(-1, 1, size=2),
-            'buttons': np.random.randint(0, 2, size=14)
-        }
+        # Sample action from policy or random
+        if args.policy:
+            observation = cv2.resize(observation, (320, 240))
+            observation_tensor = torch.as_tensor(observation[None]).to(policy.config.device)
+            observation_tensor = einops.rearrange(observation_tensor, "b h w c -> b c h w").contiguous().float() / 255.0
+            print(observation_tensor.shape)
+            action_tensor = policy.select_action({'observation.image': observation_tensor})
+            action = {k.removeprefix("action."): v.cpu().numpy()[0] for k, v in action_tensor.items()}
+        else:
+            action = env.action_space.sample()
         observation, reward, terminated, truncated, info = env.step(action)
 
         # Convert numpy array to pygame surface and display
@@ -211,6 +226,8 @@ if __name__ == "__main__":
 
         if terminated or truncated:
             observation, info = env.reset()
+            if args.policy:
+                policy.reset()
 
     env.close()
     pygame.quit()
