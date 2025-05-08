@@ -1,8 +1,10 @@
+import json
 import math
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from pathlib import Path
+from typing import Any, Self
 
 import einops
 import torch
@@ -12,6 +14,8 @@ import torchvision
 from torch import Tensor
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+
+from lakitu.training.helpers import BaseConfig
 
 IMAGENET_STATS = {
     "mean": [0.485, 0.456, 0.406],
@@ -40,7 +44,7 @@ class PolicyFeature:
 
 
 @dataclass
-class DiffusionConfig:
+class DiffusionConfig(BaseConfig):
     type: str = "DiffusionPolicy"
     device: str = "cuda"
     use_amp: bool = False
@@ -294,6 +298,19 @@ class DiffusionPolicy(nn.Module):
 
         # Concatenate features then flatten to (B, global_cond_dim).
         return torch.cat(global_cond_feats, dim=-1).flatten(start_dim=1)
+
+    # Checkpoint loading
+
+    @classmethod
+    def from_pretrained(cls, checkpoint_dir: Path) -> Self:
+        from safetensors.torch import safe_open
+        with open(checkpoint_dir / 'train_config.json') as f:
+            config = DiffusionConfig.create(json.load(f)['policy'])
+        model: Self = cls(config).to(config.device)
+        with safe_open(checkpoint_dir / 'model.safetensors', framework="pt", device=config.device) as f:
+            state_dict = {key: f.get_tensor(key) for key in f.keys()}
+        model.load_state_dict(state_dict, strict=True)
+        return model
 
 
 class DiffusionRgbEncoder(nn.Module):
