@@ -22,18 +22,15 @@ IMAGENET_STATS = {
     "std": [0.229, 0.224, 0.225],
 }
 
-
 class NormalizationMode(str, Enum):
     MIN_MAX = "MIN_MAX"
     MEAN_STD = "MEAN_STD"
     IDENTITY = "IDENTITY"
 
-
 class FeatureType(str, Enum):
     STATE = "STATE"
     VISUAL = "VISUAL"
     ACTION = "ACTION"
-
 
 @dataclass
 class PolicyFeature:
@@ -42,14 +39,12 @@ class PolicyFeature:
     norm_mode: NormalizationMode
     stats: dict[str, list[float]]
 
-
 @dataclass
 class DiffusionConfig(BaseConfig):
-    type: str = "DiffusionPolicy"
     device: str = "cuda"
     use_amp: bool = False
 
-    # Inputs / output structure.
+    # Inputs / output structure
     n_obs_steps: int = 2
     horizon: int = 16
     n_action_steps: int = 8
@@ -76,21 +71,21 @@ class DiffusionConfig(BaseConfig):
     # which avoids excessive padding and leads to improved training results.
     drop_n_last_frames: int = 7  # horizon - n_action_steps - n_obs_steps + 1
 
-    # Architecture / modeling.
-    # Vision backbone.
+    # Architecture / modeling
+    # Vision backbone
     vision_backbone: str = "resnet18"
-    crop_shape: tuple[int, int] | None = (84, 84)
+    vision_features: int = 1024
+    crop_shape: tuple[int, int] | None = (240, 180)
     crop_is_random: bool = True
     pretrained_backbone_weights: str | None = None
     use_group_norm: bool = True
-    # Unet.
-    down_dims: tuple[int, ...] = (512, 1024, 2048)
+    # Unet
+    down_dims: tuple[int, ...] = (256, 512, 1024)
     kernel_size: int = 5
     n_groups: int = 8
     diffusion_step_embed_dim: int = 128
     use_film_scale_modulation: bool = True
-    spatial_softmax_num_keypoints: int = 512
-    # Noise scheduler.
+    # Noise scheduler
     noise_scheduler_type: str = "DDPM"
     num_train_timesteps: int = 100
     beta_schedule: str = "squaredcos_cap_v2"
@@ -142,7 +137,6 @@ def _make_noise_scheduler(name: str, **kwargs: Any) -> Any:
     else:
         raise ValueError(f"Unsupported noise scheduler type {name}")
 
-
 def _replace_batchnorm(module: nn.Module) -> nn.Module:
     for name, child in module.named_children():
         if isinstance(child, nn.BatchNorm2d):
@@ -161,11 +155,11 @@ class DiffusionPolicy(nn.Module):
         self.normalize_targets = Normalize(config.output_features)
         self.unnormalize_outputs = Unnormalize(config.output_features)
 
-        # Build observation encoders (depending on which observations are provided).
+        # Build observation encoders (depending on which observations are provided)
         global_cond_dim = sum(feat.shape[0] for feat in self.config.state_features.values())
         if self.config.image_features:
             self.rgb_encoder = DiffusionRgbEncoder(config)
-            global_cond_dim += self.rgb_encoder.feature_dim * len(self.config.image_features)
+            global_cond_dim += config.vision_features * len(self.config.image_features)
 
         self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps)
 
@@ -217,7 +211,7 @@ class DiffusionPolicy(nn.Module):
         global_cond = self._prepare_global_conditioning(batch)  # encode image features and concatenate with state vector
         actions = self.conditional_sample(batch_size, global_cond=global_cond)  # run sampling
 
-        # Extract `n_action_steps` steps worth of actions (from the current observation).
+        # Extract `n_action_steps` steps worth of actions (from the current observation)
         start = n_obs_steps - 1
         end = start + self.config.n_action_steps
         actions = actions[:, start:end]
@@ -247,7 +241,7 @@ class DiffusionPolicy(nn.Module):
         return loss, output_dict
 
     def compute_loss(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict[str, Tensor]]:
-        # Input validation.
+        # Input validation
         assert set(batch).issuperset({"observation.image", "action.joystick", "action.buttons"})
         n_obs_steps = batch["observation.image"].shape[1]
         horizon = batch["action.joystick"].shape[1]
@@ -266,8 +260,8 @@ class DiffusionPolicy(nn.Module):
         # Run the denoising network
         pred = self.unet(noisy_trajectory, timesteps, global_cond)
 
-        # Compute the loss.
-        # The target is either the original trajectory, or the noise.
+        # Compute the loss
+        # The target is either the original trajectory, or the noise
         if self.config.prediction_type == "epsilon":
             target = eps
         elif self.config.prediction_type == "sample":
@@ -277,7 +271,7 @@ class DiffusionPolicy(nn.Module):
 
         loss = F.mse_loss(pred, target, reduction="none")
 
-        # Mask loss wherever the action is padded with copies (edges of the dataset trajectory).
+        # Mask loss wherever the action is padded with copies (edges of the dataset trajectory)
         if self.config.do_mask_loss_for_padding:
             if "action_is_pad" not in batch:
                 raise ValueError(f"You need to provide 'action_is_pad' in the batch when {self.config.do_mask_loss_for_padding=}.")
@@ -296,7 +290,7 @@ class DiffusionPolicy(nn.Module):
             img_features = einops.rearrange(img_features, "(b s) ... -> b s (...)", b=batch_size, s=n_obs_steps)
             global_cond_feats.append(img_features)
 
-        # Concatenate features then flatten to (B, global_cond_dim).
+        # Concatenate features then flatten to (B, global_cond_dim)
         return torch.cat(global_cond_feats, dim=-1).flatten(start_dim=1)
 
     # Checkpoint loading
@@ -344,8 +338,7 @@ class DiffusionRgbEncoder(nn.Module):
         feature_map_shape = tuple(output.shape)[1:]
 
         self.pool = nn.AvgPool2d(kernel_size=feature_map_shape[1:])
-        self.feature_dim = config.spatial_softmax_num_keypoints * 2
-        self.out = nn.Linear(feature_map_shape[0], self.feature_dim)
+        self.out = nn.Linear(feature_map_shape[0], config.vision_features)
         self.relu = nn.ReLU()
 
     def forward(self, x: Tensor) -> Tensor:
@@ -376,7 +369,7 @@ class DiffusionConditionalUnet1d(nn.Module):
         # The FiLM conditioning dimension
         cond_dim = config.diffusion_step_embed_dim + global_cond_dim
 
-        # In channels / out channels for each downsampling block in the Unet's encoder. For the decoder, we just reverse these.
+        # In channels / out channels for each downsampling block in the Unet's encoder. For the decoder, we just reverse these
         in_out = [(config.action_size, config.down_dims[0])] + list(zip(config.down_dims[:-1], config.down_dims[1:], strict=True))
 
         # Unet encoder
@@ -385,39 +378,33 @@ class DiffusionConditionalUnet1d(nn.Module):
         for ind, (dim_in, dim_out) in enumerate(in_out):
             is_last = ind >= (len(in_out) - 1)
             self.down_modules.append(
-                nn.ModuleList(
-                    [
-                        DiffusionConditionalResidualBlock1d(dim_in, dim_out, cond_dim, kernel_size, n_groups, use_film_scale),
-                        DiffusionConditionalResidualBlock1d(dim_out, dim_out, cond_dim, kernel_size, n_groups, use_film_scale),
-                        # Downsample as long as it is not the last block.
-                        nn.Conv1d(dim_out, dim_out, 3, 2, 1) if not is_last else nn.Identity(),
-                    ]
-                )
+                nn.ModuleList([
+                    DiffusionConditionalResidualBlock1d(dim_in, dim_out, cond_dim, kernel_size, n_groups, use_film_scale),
+                    DiffusionConditionalResidualBlock1d(dim_out, dim_out, cond_dim, kernel_size, n_groups, use_film_scale),
+                    # Downsample as long as it is not the last block
+                    nn.Conv1d(dim_out, dim_out, 3, 2, 1) if not is_last else nn.Identity(),
+                ])
             )
 
         # Processing in the middle of the auto-encoder
         mid_dim = config.down_dims[-1]
-        self.mid_modules = nn.ModuleList(
-            [
-                DiffusionConditionalResidualBlock1d(mid_dim, mid_dim, cond_dim, kernel_size, n_groups, use_film_scale),
-                DiffusionConditionalResidualBlock1d(mid_dim, mid_dim, cond_dim, kernel_size, n_groups, use_film_scale),
-            ]
-        )
+        self.mid_modules = nn.ModuleList([
+            DiffusionConditionalResidualBlock1d(mid_dim, mid_dim, cond_dim, kernel_size, n_groups, use_film_scale),
+            DiffusionConditionalResidualBlock1d(mid_dim, mid_dim, cond_dim, kernel_size, n_groups, use_film_scale),
+        ])
 
         # Unet decoder
         self.up_modules = nn.ModuleList([])
         for ind, (dim_out, dim_in) in enumerate(reversed(in_out[1:])):
             is_last = ind >= (len(in_out) - 1)
             self.up_modules.append(
-                nn.ModuleList(
-                    [
-                        # dim_in * 2, because it takes the encoder's skip connection as well
-                        DiffusionConditionalResidualBlock1d(dim_in * 2, dim_out, cond_dim, kernel_size, n_groups, use_film_scale),
-                        DiffusionConditionalResidualBlock1d(dim_out, dim_out, cond_dim, kernel_size, n_groups, use_film_scale),
-                        # Upsample as long as it is not the last block.
-                        nn.ConvTranspose1d(dim_out, dim_out, 4, 2, 1) if not is_last else nn.Identity(),
-                    ]
-                )
+                nn.ModuleList([
+                    # dim_in * 2, because it takes the encoder's skip connection as well
+                    DiffusionConditionalResidualBlock1d(dim_in * 2, dim_out, cond_dim, kernel_size, n_groups, use_film_scale),
+                    DiffusionConditionalResidualBlock1d(dim_out, dim_out, cond_dim, kernel_size, n_groups, use_film_scale),
+                    # Upsample as long as it is not the last block
+                    nn.ConvTranspose1d(dim_out, dim_out, 4, 2, 1) if not is_last else nn.Identity(),
+                ])
             )
 
         self.final_conv = nn.Sequential(
@@ -426,13 +413,13 @@ class DiffusionConditionalUnet1d(nn.Module):
         )
 
     def forward(self, x: Tensor, timestep: Tensor, global_cond: Tensor) -> Tensor:
-        # For 1D convolutions we'll need feature dimension first.
+        # For 1D convolutions we'll need feature dimension first
         x = einops.rearrange(x, "b t d -> b d t")
 
         timesteps_embed = self.diffusion_step_encoder(timestep)
         global_feature = torch.cat([timesteps_embed, global_cond], dim=-1)
 
-        # Run encoder, keeping track of skip features to pass to the decoder.
+        # Run encoder, keeping track of skip features to pass to the decoder
         encoder_skip_features: list[Tensor] = []
         for resnet, resnet2, downsample in self.down_modules:
             x = resnet(x, global_feature)
@@ -443,7 +430,7 @@ class DiffusionConditionalUnet1d(nn.Module):
         for mid_module in self.mid_modules:
             x = mid_module(x, global_feature)
 
-        # Run decoder, using the skip features from the encoder.
+        # Run decoder, using the skip features from the encoder
         for resnet, resnet2, upsample in self.up_modules:
             x = torch.cat((x, encoder_skip_features.pop()), dim=1)
             x = resnet(x, global_feature)
@@ -491,7 +478,7 @@ class DiffusionConditionalResidualBlock1d(nn.Module):
         self.out_channels = out_channels
         self.conv1 = DiffusionConv1dBlock(in_channels, out_channels, kernel_size, n_groups=n_groups)
 
-        # FiLM modulation (https://arxiv.org/abs/1709.07871) outputs per-channel bias and (maybe) scale.
+        # FiLM modulation (https://arxiv.org/abs/1709.07871) outputs per-channel bias and (maybe) scale
         cond_channels = out_channels * 2 if use_film_scale else out_channels
         self.cond_encoder = nn.Sequential(nn.Mish(), nn.Linear(cond_dim, cond_channels))
 
