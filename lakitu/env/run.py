@@ -140,7 +140,7 @@ def encode(data_queue, savestate_path):
     stream.width = width
     stream.height = height
     stream.pix_fmt = 'yuv420p'
-    stream.codec_context.options = {'crf': '23', 'g': '30'}
+    stream.codec_context.options = {'crf': '23', 'g': '10'}
 
     # Header should follow the spec defined in lakitu/datasets/dataset.py
     data_path = result_path / 'episode.data'
