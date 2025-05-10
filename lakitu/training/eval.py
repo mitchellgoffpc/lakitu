@@ -19,11 +19,11 @@ from lakitu.training.models.diffusion import DiffusionPolicy
 
 @dataclass
 class EnvConfig:
-    task: str = "Mario64"
     rom_path: Path = Path(__file__).parents[2] / "Super Mario 64 (USA).z64"
     savestate_path: Path | None = Path(__file__).parents[1] / "data" / "savestates" / "savestate_0.m64p"
     render_mode: str = "rgb_array"
     episode_length: int = 1000
+    fps: int = 30
 
     @property
     def gym_kwargs(self) -> dict[str, Any]:

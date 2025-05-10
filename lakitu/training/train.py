@@ -1,4 +1,7 @@
 #!/usr/bin/env python
+import os
+import re
+import glob
 import json
 import time
 from dataclasses import dataclass, field, asdict
@@ -40,10 +43,11 @@ class DatasetConfig:
 class WandBConfig:
     enable: bool = False
     disable_artifact: bool = False
-    project: str = "lerobot"
+    project: str = "mario64"
     entity: str | None = None
     notes: str | None = None
     run_id: str | None = None
+    job_name: str | None = None
     mode: str | None = None  # Allowed values: 'online', 'offline' 'disabled'. Defaults to 'online'
 
 @dataclass
@@ -82,29 +86,6 @@ class TrainConfig(BaseConfig):
     scheduler: LRSchedulerConfig = field(default_factory=LRSchedulerConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
     wandb: WandBConfig = field(default_factory=WandBConfig)
-
-
-def flatten_dict(d: dict, parent_key: str = "", sep: str = "/") -> dict:
-    items: list = []
-    for k, v in d.items():
-        new_key = f"{parent_key}{sep}{k}" if parent_key else k
-        if isinstance(v, dict):
-            items.extend(flatten_dict(v, new_key, sep=sep).items())
-        else:
-            items.append((new_key, v))
-    return dict(items)
-
-def unflatten_dict(d: dict, sep: str = "/") -> dict:
-    outdict: dict = {}
-    for key, value in d.items():
-        parts = key.split(sep)
-        d = outdict
-        for part in parts[:-1]:
-            if part not in d:
-                d[part] = {}
-            d = d[part]
-        d[parts[-1]] = value
-    return outdict
 
 
 class EpisodeAwareSampler:
@@ -244,6 +225,95 @@ class MetricsTracker:
             m.reset()
 
 
+class WandBLogger:
+    """A helper class to log object using wandb."""
+
+    def __init__(self, cfg: TrainConfig):
+        self.cfg = cfg.wandb
+        self.log_dir = cfg.output_dir
+        self.env_fps = cfg.eval.env.fps
+
+        # Set up WandB.
+        os.environ["WANDB_SILENT"] = "True"
+        import wandb
+
+        if cfg.wandb.run_id:
+            wandb_run_id = cfg.wandb.run_id
+        elif cfg.resume:
+            wandb_run_id = get_wandb_run_id_from_filesystem(self.log_dir)
+        else:
+            wandb_run_id = None
+
+        wandb.init(
+            id=wandb_run_id,
+            project=self.cfg.project,
+            entity=self.cfg.entity,
+            name=self.cfg.job_name,
+            notes=self.cfg.notes,
+            dir=self.log_dir,
+            config=asdict(cfg),
+            # TODO(rcadene): try set to True
+            save_code=False,
+            # TODO(rcadene): split train and eval, and run async eval with job_type="eval"
+            job_type="train_eval",
+            resume="must" if cfg.resume else None,
+            mode=self.cfg.mode if self.cfg.mode in ["online", "offline", "disabled"] else "online",
+        )
+        print(f"Track this run --> {wandb.run.get_url()}")
+        self._wandb = wandb
+
+    def log_policy(self, checkpoint_dir: Path) -> None:
+        """Checkpoints the policy to wandb."""
+        if self.cfg.disable_artifact:
+            return
+
+        step_id = checkpoint_dir.name
+        artifact_name = f"{step_id}"
+        artifact_name = artifact_name.replace(":", "_").replace("/", "_")  # WandB artifacts don't accept ":" or "/" in their name.
+        artifact = self._wandb.Artifact(artifact_name, type="model")
+        artifact.add_file(checkpoint_dir / 'pretrained_model' / 'model.safetensors')
+        self._wandb.log_artifact(artifact)
+
+    def log_dict(self, d: dict, step: int, mode: str = "train") -> None:
+        if mode not in {"train", "eval"}:
+            raise ValueError(mode)
+
+        for k, v in d.items():
+            if not isinstance(v, (int, float, str)):
+                print(f'WandB logging of key "{k}" was ignored as its type is not handled by this wrapper.')
+                continue
+            self._wandb.log({f"{mode}/{k}": v}, step=step)
+
+    def log_video(self, video_path: str, step: int, mode: str = "train") -> None:
+        if mode not in {"train", "eval"}:
+            raise ValueError(mode)
+
+        wandb_video = self._wandb.Video(video_path, fps=self.env_fps, format="mp4")
+        self._wandb.log({f"{mode}/video": wandb_video}, step=step)
+
+
+def get_wandb_run_id_from_filesystem(log_dir: Path) -> str:
+    # Get the WandB run ID.
+    paths = glob.glob(str(log_dir / "wandb/latest-run/run-*"))
+    if len(paths) != 1:
+        raise RuntimeError("Couldn't get the previous WandB run ID for run resumption.")
+    match = re.search(r"run-([^\.]+).wandb", paths[0].split("/")[-1])
+    if match is None:
+        raise RuntimeError("Couldn't get the previous WandB run ID for run resumption.")
+    wandb_run_id = match.groups(0)[0]
+    assert isinstance(wandb_run_id, str)  # to make mypy happy
+    return wandb_run_id
+
+def flatten_dict(d: dict, parent_key: str = "", sep: str = "/") -> dict:
+    items: list = []
+    for k, v in d.items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+        if isinstance(v, dict):
+            items.extend(flatten_dict(v, new_key, sep=sep).items())
+        else:
+            items.append((new_key, v))
+    return dict(items)
+
 def resolve_delta_timestamps(cfg: DiffusionConfig) -> dict[str, list[int]]:
     delta_timestamps = {}
     for key in cfg.input_features.keys() | cfg.output_features.keys():
@@ -364,7 +434,7 @@ def update_policy(
 
 def train(cfg: TrainConfig) -> None:
     # print(json.dumps(asdict(cfg), indent=2))
-    wandb_logger = None
+    wandb_logger = WandBLogger(cfg) if cfg.wandb.enable else None
 
     if cfg.seed is not None:
         set_seed(cfg.seed)
@@ -452,7 +522,7 @@ def train(cfg: TrainConfig) -> None:
             cfg.optimizer.grad_clip_norm,
         )
 
-        # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we increment `step` here.
+        # Note: eval and checkpoint happens *after* the `step`th training update has completed, so we increment `step` here
         step += 1
         train_tracker.step()
         is_log_step = cfg.log_freq > 0 and step % cfg.log_freq == 0
