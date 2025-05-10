@@ -42,6 +42,7 @@ class DatasetConfig:
 @dataclass
 class WandBConfig:
     enable: bool = False
+    silent: bool = True
     disable_artifact: bool = False
     project: str = "mario64"
     entity: str | None = None
@@ -233,8 +234,9 @@ class WandBLogger:
         self.log_dir = cfg.output_dir
         self.env_fps = cfg.eval.env.fps
 
-        # Set up WandB.
-        os.environ["WANDB_SILENT"] = "True"
+        # Set up WandB
+        if cfg.wandb.silent:
+            os.environ["WANDB_SILENT"] = "True"
         import wandb
 
         if cfg.wandb.run_id:
@@ -259,7 +261,7 @@ class WandBLogger:
             resume="must" if cfg.resume else None,
             mode=self.cfg.mode if self.cfg.mode in ["online", "offline", "disabled"] else "online",
         )
-        print(f"Track this run --> {wandb.run.get_url()}")
+        print(f"Track this run --> {wandb.run.url}")
         self._wandb = wandb
 
     def log_policy(self, checkpoint_dir: Path) -> None:
@@ -293,7 +295,6 @@ class WandBLogger:
 
 
 def get_wandb_run_id_from_filesystem(log_dir: Path) -> str:
-    # Get the WandB run ID.
     paths = glob.glob(str(log_dir / "wandb/latest-run/run-*"))
     if len(paths) != 1:
         raise RuntimeError("Couldn't get the previous WandB run ID for run resumption.")
