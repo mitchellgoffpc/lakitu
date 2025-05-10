@@ -59,8 +59,8 @@ def parse_stick_data(report, left=True):
     data = report[6 if left else 9:]
     x_axis = (data[0] | ((data[1] & 0xF) << 8))
     y_axis = ((data[1] >> 4) | (data[2] << 4))
-    x_axis = (x_axis - 1900) / 1900 if abs(x_axis - 1900) > 300 else 0  # scale and deadzone
-    y_axis = (y_axis - 1900) / 1900 if abs(y_axis - 1900) > 300 else 0
+    x_axis = (x_axis - 1900) / 1500 if abs(x_axis - 1900) > 300 else 0  # scale and deadzone
+    y_axis = (y_axis - 1900) / 1500 if abs(y_axis - 1900) > 300 else 0
     return x_axis, y_axis
 
 
@@ -179,7 +179,11 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--savestate', type=str, default=None, help='Path to save state file')
     parser.add_argument('-r', '--record', action='store_true', default=False, help='Record the episode')
     args = parser.parse_args()
-    assert Path(args.path).is_file(), f"File {args.path!r} does not exist"
+
+    if not Path(args.path).is_file():
+        raise FileNotFoundError(f"ROM file {args.path!r} does not exist")
+    if args.savestate and not Path(args.savestate).is_file():
+        raise FileNotFoundError(f"Savestate file {args.savestate!r} does not exist")
 
     # Create the encoder thread
     ctx = multiprocessing.get_context('spawn')
