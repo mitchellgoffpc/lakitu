@@ -45,6 +45,7 @@ class EvalConfig:
 @dataclass
 class EvalPolicyConfig(BaseConfig):
     policy_path: Path
+    num_inference_steps: int = 10
     eval: EvalConfig = field(default_factory=EvalConfig)
 
 
@@ -199,7 +200,7 @@ def eval_main(config: EvalPolicyConfig) -> None:
     torch.backends.cuda.matmul.allow_tf32 = True
     set_seed(config.eval.seed)
 
-    policy = DiffusionPolicy.from_pretrained(config.policy_path)
+    policy = DiffusionPolicy.from_pretrained(config.policy_path, num_inference_steps=config.num_inference_steps)
     info = eval_policy(config.eval, policy)
     print(info["aggregated"])
 
