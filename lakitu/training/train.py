@@ -4,7 +4,7 @@ import re
 import glob
 import json
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Union, Iterator
@@ -328,10 +328,6 @@ def get_step_identifier(step: int, total_steps: int) -> str:
     num_digits = max(6, len(str(total_steps)))
     return f"{step:0{num_digits}d}"
 
-def get_step_checkpoint_dir(output_dir: Path, total_steps: int, step: int) -> Path:
-    """Returns the checkpoint sub-directory corresponding to the step number."""
-    step_identifier = get_step_identifier(step, total_steps)
-    return output_dir / 'checkpoints' / step_identifier
 
 def save_checkpoint(
     checkpoint_dir: Path,
@@ -541,14 +537,15 @@ def train(cfg: TrainConfig) -> None:
 
         if cfg.save_checkpoint and is_saving_step:
             print(f"Checkpoint policy after step {step}")
-            checkpoint_dir = get_step_checkpoint_dir(Path(cfg.output_dir), cfg.steps, step)
+            checkpoint_dir = Path(cfg.output_dir) / 'checkpoints' / get_step_identifier(step, cfg.steps)
             save_checkpoint(checkpoint_dir, step, cfg, policy, optimizer, lr_scheduler)
             if wandb_logger:
                 wandb_logger.log_policy(checkpoint_dir)
 
         if is_eval_step:
             print(f"Eval policy at step {step}")
-            eval_info = eval_policy(cfg.eval, policy)
+            eval_dir = Path(cfg.output_dir) / 'evals' / get_step_identifier(step, cfg.steps)
+            eval_info = eval_policy(replace(cfg.eval, output_dir=eval_dir), policy)
             eval_metrics = {
                 "avg_sum_reward": AverageMeter("∑rwrd", ":.3f"),
                 "pc_success": AverageMeter("success", ":.1f"),
