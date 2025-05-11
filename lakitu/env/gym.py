@@ -180,6 +180,7 @@ if __name__ == "__main__":
     import torch
     import cv2
     from lakitu.training.models.diffusion import DiffusionPolicy
+    from lakitu.datasets.dataset import load_episode_data, draw_actions
 
     parser = argparse.ArgumentParser(description='Run N64 Gym Environment')
     parser.add_argument('rom_path', type=str, help='Path to the ROM file')
@@ -189,8 +190,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Initialize Pygame
+    W, H = 320, 240
     pygame.init()
-    screen = pygame.display.set_mode((640, 480))
+    screen = pygame.display.set_mode((W * 2, H * 2 + 100))
     pygame.display.set_caption('N64')
     clock = pygame.time.Clock()
 
@@ -202,19 +204,18 @@ if __name__ == "__main__":
         policy = DiffusionPolicy.from_pretrained(Path(args.policy))
         policy.reset()
     elif args.replay:
-        from lakitu.datasets.dataset import load_episode_data
         episode_data = load_episode_data(Path(args.replay) / 'episode.data')
 
-    running = True
     frame_idx = 0
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
+    while True:
+        if any(event.type == pygame.QUIT for event in pygame.event.get()):
+            break
+        elif args.replay and frame_idx >= len(episode_data['action.joystick']):
+            break
 
         # Sample action from policy or random
         if args.policy:
-            observation = cv2.resize(observation, (320, 240))
+            observation = cv2.resize(observation, (W, H))
             observation_tensor = torch.as_tensor(observation[None]).to(policy.config.device)
             observation_tensor = einops.rearrange(observation_tensor, "b h w c -> b c h w").contiguous().float() / 255.0
             action_tensor = policy.select_action({'observation.image': observation_tensor})
@@ -228,6 +229,8 @@ if __name__ == "__main__":
         # Convert numpy array to pygame surface and display
         surf = pygame.surfarray.make_surface(observation.swapaxes(0, 1))
         screen.blit(surf, (0, 0))
+        draw_actions(screen, action['joystick'], action['buttons'], H * 2, W * 2, 100)
+
         pygame.display.flip()
         clock.tick(30)
         frame_idx += 1

@@ -13,6 +13,11 @@ from lakitu.datasets.vidindex import CodecType, get_frame_info, get_mp4_boxes, g
 DEFAULT_DATA_DIR = Path(__file__).parent.parent / 'data' / 'episodes'
 VIDEO_KEY = 'observation.image'
 
+BLACK = (0, 0, 0)
+WHITE = (255, 255, 255)
+RED = (255, 0, 0)
+GRAY = (128, 128, 128)
+
 
 # Normally we'd use parquet or .npy files for our tabular data, but since we'll be streaming the data to disk
 # as we record, it's convenient to use a format that's more append-friendly. The format we use is similar in nature
@@ -33,6 +38,34 @@ def load_episode_data(data_file):
         row_size = sum(np.dtype(field['dtype']).itemsize * (np.prod(field['shape']) if field['shape'] else 1) for field in fields)
         assert len(buffer) % row_size == 0, f"Data size {len(buffer)} is not a multiple of row size {row_size}"
         return np.frombuffer(buffer, dtype=[(field['name'], np.dtype(field['dtype']), tuple(field['shape'])) for field in fields])
+
+def draw_actions(screen, joystick, buttons, base_y, width, height):
+    import pygame
+    font = pygame.font.Font(None, 24)
+
+    # Draw background
+    pygame.draw.rect(screen, BLACK, (0, base_y, width * 2, height))
+
+    # Draw joystick
+    joy_x, joy_y = joystick
+    center_x, center_y = 80, base_y + 50
+    pygame.draw.circle(screen, GRAY, (center_x, center_y), 30)
+    stick_x = center_x + joy_x.item() * 25
+    stick_y = center_y - joy_y.item() * 25
+    pygame.draw.circle(screen, RED, (stick_x, stick_y), 10)
+
+    # Draw buttons
+    button_names = M64pButtons.get_button_fields()
+    button_states = dict(zip(button_names, buttons, strict=True))
+    button_states = {k.split('_')[0]: button_states[k] for k in ('A_BUTTON', 'B_BUTTON', 'Z_TRIG', 'START_BUTTON')}
+    for i, (name, state) in enumerate(button_states.items()):
+        x = 160 + (i * 60)
+        y = base_y + 50
+        color = RED if state else GRAY
+        pygame.draw.circle(screen, color, (x, y), 15)
+        text = font.render(name, True, WHITE)
+        text_rect = text.get_rect(center=(x, y))
+        screen.blit(text, text_rect)
 
 
 # Episode Dataset
@@ -187,20 +220,13 @@ if __name__ == "__main__":
         import cv2
         import pygame
         pygame.init()
-        screen = pygame.display.set_mode((W * 2, H * 2 + 100))  # Extra 100px for controls
+        screen = pygame.display.set_mode((W * 2, H * 2 + 100))
         clock = pygame.time.Clock()
-
-        # Setup colors and fonts
-        BLACK = (0, 0, 0)
-        WHITE = (255, 255, 255)
-        RED = (255, 0, 0)
-        GRAY = (128, 128, 128)
-        font = pygame.font.Font(None, 24)
 
         running = True
         frames: list[np.ndarray] = []
         frame_idx = 0
-        batch = None
+        batch = {}
         while running:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
@@ -214,8 +240,6 @@ if __name__ == "__main__":
                 batch = dataset[np.random.randint(len(dataset))] if args.frames_per_sample else dataset[frame_idx]
                 frames_tensor = batch['observation.image']
                 frames = list((frames_tensor.permute(0, 2, 3, 1).numpy() * 255).astype(np.uint8))
-                joysticks = batch['action.joystick']
-                buttons = batch['action.buttons']
 
             # Draw frame
             frame_idx += 1
@@ -224,29 +248,9 @@ if __name__ == "__main__":
             surface = pygame.surfarray.make_surface(frame.swapaxes(0, 1))
             screen.blit(surface, (0, 0))
 
-            # Draw control panel background
-            pygame.draw.rect(screen, BLACK, (0, H * 2, W * 2, 100))
-
-            # Draw joystick
-            joy_x, joy_y = joysticks[len(joysticks) - len(frames) - 1]
-            center_x, center_y = 80, H * 2 + 50
-            pygame.draw.circle(screen, GRAY, (center_x, center_y), 30)
-            stick_x = center_x + joy_x.item() * 25
-            stick_y = center_y - joy_y.item() * 25
-            pygame.draw.circle(screen, RED, (stick_x, stick_y), 10)
-
-            # Draw buttons
-            button_names = M64pButtons.get_button_fields()
-            button_states = dict(zip(button_names, buttons[len(buttons) - len(frames) - 1], strict=True))
-            button_states = {k.split('_')[0]: button_states[k] for k in ('A_BUTTON', 'B_BUTTON', 'Z_TRIG', 'START_BUTTON')}
-            for i, (name, state) in enumerate(button_states.items()):
-                x = 160 + (i * 60)
-                y = H * 2 + 50
-                color = RED if state else GRAY
-                pygame.draw.circle(screen, color, (x, y), 15)
-                text = font.render(name, True, WHITE)
-                text_rect = text.get_rect(center=(x, y))
-                screen.blit(text, text_rect)
+                        # Draw actions
+            current_idx = len(batch['action.joystick']) - len(frames) - 1
+            draw_actions(screen, batch['action.joystick'][current_idx], batch['action.buttons'][current_idx], H * 2, W * 2, 100)
 
             pygame.display.flip()
             clock.tick(30)
