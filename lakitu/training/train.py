@@ -35,7 +35,7 @@ class ImageTransformsConfig:
 
 @dataclass
 class DatasetConfig:
-    root: str | None = None
+    data_dir: Path = Path(__file__).parent.parent / 'data' / 'episodes'
     episodes: list[int] | None = None
     image_transforms: ImageTransformsConfig = field(default_factory=ImageTransformsConfig)
 
@@ -446,7 +446,7 @@ def train(cfg: TrainConfig) -> None:
 
     print("Creating dataset")
     delta_timestamps = resolve_delta_timestamps(cfg.policy)
-    dataset = EpisodeDataset(deltas=delta_timestamps)
+    dataset = EpisodeDataset(data_dir=cfg.dataset.data_dir, deltas=delta_timestamps)
     num_episodes = len(dataset.episodes)
     num_frames = sum(len(ep.data) for ep in dataset.episodes.values())
     episode_data_index = {
