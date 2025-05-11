@@ -184,7 +184,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run N64 Gym Environment')
     parser.add_argument('rom_path', type=str, help='Path to the ROM file')
     parser.add_argument('-s', '--savestate', type=str, default=None, help='Path to save state file')
-    parser.add_argument('-p', '--policy', type=str, default=None, help='Path to the policy file')
+    parser.add_argument('-p', '--policy', type=str, default=None, help='Path to policy file')
+    parser.add_argument('-r', '--replay', type=str, default=None, help="Path of episode to replay")
     args = parser.parse_args()
 
     # Initialize Pygame
@@ -193,14 +194,19 @@ if __name__ == "__main__":
     pygame.display.set_caption('N64')
     clock = pygame.time.Clock()
 
-    env = N64Env(args.rom_path, args.savestate, render_mode="rgb_array")
+    savestate_path = Path(args.replay) / "initial_state.m64p" if args.replay and not args.savestate else args.savestate
+    env = N64Env(args.rom_path, savestate_path, render_mode="rgb_array")
     observation, info = env.reset()
 
     if args.policy:
         policy = DiffusionPolicy.from_pretrained(Path(args.policy))
         policy.reset()
+    elif args.replay:
+        from lakitu.datasets.dataset import load_episode_data
+        episode_data = load_episode_data(Path(args.replay) / 'episode.data')
 
     running = True
+    frame_idx = 0
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -211,9 +217,10 @@ if __name__ == "__main__":
             observation = cv2.resize(observation, (320, 240))
             observation_tensor = torch.as_tensor(observation[None]).to(policy.config.device)
             observation_tensor = einops.rearrange(observation_tensor, "b h w c -> b c h w").contiguous().float() / 255.0
-            print(observation_tensor.shape)
             action_tensor = policy.select_action({'observation.image': observation_tensor})
             action = {k.removeprefix("action."): v.cpu().numpy()[0] for k, v in action_tensor.items()}
+        elif args.replay:
+            action = {k: episode_data[f'action.{k}'][frame_idx] for k in env.action_space.keys()}
         else:
             action = env.action_space.sample()
         observation, reward, terminated, truncated, info = env.step(action)
@@ -223,6 +230,7 @@ if __name__ == "__main__":
         screen.blit(surf, (0, 0))
         pygame.display.flip()
         clock.tick(30)
+        frame_idx += 1
 
         if terminated or truncated:
             observation, info = env.reset()
