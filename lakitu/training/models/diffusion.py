@@ -299,7 +299,7 @@ class DiffusionPolicy(nn.Module):
     def from_pretrained(cls, checkpoint_dir: Path, **kwargs: Any) -> Self:
         from safetensors.torch import safe_open
         with open(checkpoint_dir / 'train_config.json') as f:
-            config = DiffusionConfig.create(json.load(f)['policy'], **kwargs)
+            config = DiffusionConfig.create(json.load(f)['policy'], kwargs)
         model: Self = cls(config).to(config.device)
         with safe_open(checkpoint_dir / 'model.safetensors', framework="pt", device=config.device) as f:
             state_dict = {key: f.get_tensor(key) for key in f.keys()}
