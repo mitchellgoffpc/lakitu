@@ -163,10 +163,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Dataset visualization and benchmarking')
     parser.add_argument('mode', choices=['benchmark', 'visualize'], help='Mode to run in')
     parser.add_argument('-d', '--data-dir', type=str, default=str(DEFAULT_DATA_DIR), help='Path to the data directory')
-    parser.add_argument('-f', '--frames-per-sample', type=int, default=30, help='Number of frames per sample')
+    parser.add_argument('-f', '--frames-per-sample', type=int, default=None, help='Number of frames per sample')
     args = parser.parse_args()
 
-    delta_range = list(range(-args.frames_per_sample + 1, 1))
+    delta_range = list(range(-args.frames_per_sample + 1, 1)) if args.frames_per_sample else [0]
     deltas = {key: delta_range for key in ['observation.image', 'action.joystick', 'action.buttons']}
     dataset = EpisodeDataset(args.data_dir, deltas=deltas)
 
@@ -199,20 +199,26 @@ if __name__ == "__main__":
 
         running = True
         frames: list[np.ndarray] = []
+        frame_idx = 0
         batch = None
         while running:
             for event in pygame.event.get():
-                if event.type == pygame.QUIT:
+                if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
                     running = False
+                elif not args.frames_per_sample and event.type == pygame.KEYDOWN and event.key == pygame.K_TAB:
+                    next_episode = next((ep for ep in dataset.episodes.values() if ep.start_idx > frame_idx), None)
+                    frame_idx = next_episode.start_idx if next_episode else 0
+                    frames = []
 
             if not frames:
-                batch = dataset[np.random.randint(len(dataset))]
+                batch = dataset[np.random.randint(len(dataset))] if args.frames_per_sample else dataset[frame_idx]
                 frames_tensor = batch['observation.image']
                 frames = list((frames_tensor.permute(0, 2, 3, 1).numpy() * 255).astype(np.uint8))
                 joysticks = batch['action.joystick']
                 buttons = batch['action.buttons']
 
             # Draw frame
+            frame_idx += 1
             frame = frames.pop(0)
             frame = cv2.resize(frame, (W * 2, H * 2))
             surface = pygame.surfarray.make_surface(frame.swapaxes(0, 1))
