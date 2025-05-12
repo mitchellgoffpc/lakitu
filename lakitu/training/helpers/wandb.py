@@ -67,7 +67,7 @@ class WandBLogger:
         print(f"Track this run --> {wandb.run.url}")
         self._wandb = wandb
 
-    def log_policy(self, checkpoint_dir: Path) -> None:
+    def log_checkpoint(self, checkpoint_dir: Path) -> None:
         if self.cfg.disable_artifact:
             return
 

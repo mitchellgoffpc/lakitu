@@ -37,35 +37,30 @@ class PolicyFeature:
     type: FeatureType
     shape: tuple[int, ...]
     norm_mode: NormalizationMode
-    stats: dict[str, list[float]]
+    stats: dict[str, list[float]] = field(default_factory=dict)
 
 @dataclass
 class DiffusionConfig(BaseConfig):
     device: str = "cuda"
-    use_amp: bool = False
 
     # Inputs / output structure
     n_obs_steps: int = 2
     horizon: int = 16
     n_action_steps: int = 8
 
-    input_features: dict[str, PolicyFeature] = field(
-        default_factory=lambda: {
-            "observation.image": PolicyFeature(
-                type=FeatureType.VISUAL, shape=(3, 240, 320), norm_mode=NormalizationMode.MEAN_STD, stats=IMAGENET_STATS
-            ),
-        }
-    )
-    output_features: dict[str, PolicyFeature] = field(
-        default_factory=lambda: {
-            "action.buttons": PolicyFeature(
-                type=FeatureType.ACTION, shape=(14,), norm_mode=NormalizationMode.MIN_MAX, stats={"min": [0.0], "max": [1.0]}
-            ),
-            "action.joystick": PolicyFeature(
-                type=FeatureType.ACTION, shape=(2,), norm_mode=NormalizationMode.MIN_MAX, stats={"min": [-1.0], "max": [1.0]}
-            ),
-        }
-    )
+    input_features: dict[str, PolicyFeature] = field(default_factory=lambda: {
+        "observation.image": PolicyFeature(
+            type=FeatureType.VISUAL, shape=(3, 240, 320), norm_mode=NormalizationMode.MEAN_STD, stats=IMAGENET_STATS
+        ),
+    })
+    output_features: dict[str, PolicyFeature] = field(default_factory=lambda: {
+        "action.buttons": PolicyFeature(
+            type=FeatureType.ACTION, shape=(14,), norm_mode=NormalizationMode.MIN_MAX, stats={"min": [0.0], "max": [1.0]}
+        ),
+        "action.joystick": PolicyFeature(
+            type=FeatureType.ACTION, shape=(2,), norm_mode=NormalizationMode.MIN_MAX, stats={"min": [-1.0], "max": [1.0]}
+        ),
+    })
 
     # The original implementation doesn't sample frames for the last 7 steps,
     # which avoids excessive padding and leads to improved training results.
@@ -127,7 +122,6 @@ class DiffusionConfig(BaseConfig):
 
 
 # Helper functions
-
 
 def _make_noise_scheduler(name: str, **kwargs: Any) -> Any:
     if name == "DDPM":
@@ -339,7 +333,6 @@ class DiffusionRgbEncoder(nn.Module):
 
         self.pool = nn.AvgPool2d(kernel_size=feature_map_shape[1:])
         self.out = nn.Linear(feature_map_shape[0], config.vision_features)
-        self.relu = nn.ReLU()
 
     def forward(self, x: Tensor) -> Tensor:
         if self.do_crop:
@@ -349,7 +342,7 @@ class DiffusionRgbEncoder(nn.Module):
                 x = self.center_crop(x)
 
         x = torch.flatten(self.pool(self.backbone(x)), start_dim=1)
-        x = self.relu(self.out(x))
+        x = F.relu(self.out(x))
         return x
 
 
@@ -557,14 +550,14 @@ class Unnormalize(nn.Module):
 
 if __name__ == "__main__":
     config = DiffusionConfig(device="cpu")
-    model = DiffusionPolicy(config)
-    device = torch.device(config.device)
+    model = DiffusionPolicy(config).to(config.device)
+
 
     # Create dummy batch
     batch = {
-        "observation.image": torch.randn(2, 2, 3, 240, 320).to(device),
-        "action.joystick": torch.randn(2, 16, 2).to(device),
-        "action.buttons": torch.randn(2, 16, 14).to(device),
+        "observation.image": torch.randn(2, 2, 3, 240, 320).to(config.device),
+        "action.joystick": torch.randn(2, 16, 2).to(config.device),
+        "action.buttons": torch.randn(2, 16, 14).to(config.device),
     }
 
     # Forward pass
