@@ -179,7 +179,7 @@ if __name__ == "__main__":
     import einops
     import torch
     import cv2
-    from lakitu.training.models.diffusion import DiffusionPolicy
+    from lakitu.training.diffusion.policy import DiffusionPolicy
     from lakitu.datasets.dataset import load_episode_data, draw_actions
 
     parser = argparse.ArgumentParser(description='Run N64 Gym Environment')

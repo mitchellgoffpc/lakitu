@@ -14,8 +14,8 @@ from torch.optim import Optimizer
 
 from lakitu.datasets.dataset import EpisodeDataset
 from lakitu.training.helpers import BaseConfig
-from lakitu.training.eval import EvalConfig, eval_policy, set_seed
-from lakitu.training.models.diffusion import DiffusionConfig, DiffusionPolicy
+from lakitu.training.diffusion.eval import EvalConfig, eval_policy, set_seed
+from lakitu.training.diffusion.policy import DiffusionConfig, DiffusionPolicy
 
 OUTPUT_DIR = Path(__file__).parents[1] / "experiments"
 LRScheduler = Any

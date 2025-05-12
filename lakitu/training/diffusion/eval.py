@@ -15,7 +15,7 @@ from tqdm import trange
 
 from lakitu.env.gym import N64Env, m64_get_level
 from lakitu.training.helpers import BaseConfig
-from lakitu.training.models.diffusion import DiffusionPolicy
+from lakitu.training.diffusion.policy import DiffusionPolicy
 
 @dataclass
 class EnvConfig:
