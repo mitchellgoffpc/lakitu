@@ -39,6 +39,18 @@ def load_episode_data(data_file):
         assert len(buffer) % row_size == 0, f"Data size {len(buffer)} is not a multiple of row size {row_size}"
         return np.frombuffer(buffer, dtype=[(field['name'], np.dtype(field['dtype']), tuple(field['shape'])) for field in fields])
 
+def draw_info(screen, info, base_y, width):
+    import pygame
+    font = pygame.font.Font(None, 24)
+
+    # Draw text
+    x, y = width - 20, base_y
+    for key, value in info.items():
+        text = font.render(f"{key}: {value}", True, WHITE)
+        text_rect = text.get_rect(topright=(x, y))
+        screen.blit(text, text_rect)
+        y += 25
+
 def draw_actions(screen, joystick, buttons, base_y, width, height):
     import pygame
     font = pygame.font.Font(None, 24)

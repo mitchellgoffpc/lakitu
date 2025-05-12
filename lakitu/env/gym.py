@@ -180,7 +180,7 @@ if __name__ == "__main__":
     import torch
     import cv2
     from lakitu.training.diffusion.policy import DiffusionPolicy
-    from lakitu.datasets.dataset import load_episode_data, draw_actions
+    from lakitu.datasets.dataset import load_episode_data, draw_actions, draw_info
 
     parser = argparse.ArgumentParser(description='Run N64 Gym Environment')
     parser.add_argument('rom_path', type=str, help='Path to the ROM file')
@@ -197,7 +197,7 @@ if __name__ == "__main__":
     clock = pygame.time.Clock()
 
     savestate_path = Path(args.replay) / "initial_state.m64p" if args.replay and not args.savestate else args.savestate
-    env = N64Env(args.rom_path, savestate_path, render_mode="rgb_array")
+    env = N64Env(args.rom_path, savestate_path, render_mode="rgb_array", info_hooks={'level': m64_get_level})
     observation, info = env.reset()
 
     if args.policy:
@@ -230,6 +230,7 @@ if __name__ == "__main__":
         surf = pygame.surfarray.make_surface(observation.swapaxes(0, 1))
         screen.blit(surf, (0, 0))
         draw_actions(screen, action['joystick'], action['buttons'], H * 2, W * 2, 100)
+        draw_info(screen, info, H * 2, W * 2)
 
         pygame.display.flip()
         clock.tick(30)
