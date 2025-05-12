@@ -1,20 +1,22 @@
-import av
-import cv2
-import hid
-import glfw
-import json
-import struct
-import shutil
 import argparse
 import datetime
-import threading
-import numpy as np
+import json
 import multiprocessing
+import struct
+import shutil
+import threading
 from pathlib import Path
 
+import av
+import cv2
+import glfw
+import hid
+import numpy as np
+
 from lakitu.env.core import Core
-from lakitu.env.hooks import VideoExtension, InputExtension
 from lakitu.env.defs import PluginType, ErrorType, M64pButtons
+from lakitu.env.gym import m64_get_level
+from lakitu.env.hooks import VideoExtension, InputExtension
 
 KEYBOARD_AXES = {
     'X_AXIS': {glfw.KEY_LEFT: -1, glfw.KEY_RIGHT: 1},
@@ -67,8 +69,8 @@ def parse_stick_data(report, left=True):
 # Input extension for keyboard and gamepad
 
 class KeyboardInputExtension(InputExtension):
-    def __init__(self, core, data_queue=None, savestate_path=None):
-        super().__init__(core, data_queue, savestate_path)
+    def __init__(self, core, data_queue=None, savestate_path=None, info_hooks=None):
+        super().__init__(core, data_queue, savestate_path, info_hooks)
         self.pressed_keys = set()
         self.gamepad_report = [0] * 64
         self.gamepad_report[6:9] = [0b01101100, 0b11000111, 0b01110110]
@@ -142,9 +144,15 @@ def encode(data_queue, savestate_path):
     stream.pix_fmt = 'yuv420p'
     stream.codec_context.options = {'crf': '23', 'g': '10'}
 
-    # Header should follow the spec defined in lakitu/datasets/dataset.py
     data_path = result_path / 'episode.data'
-    field_defs = [('frame_index', np.uint32, ()), ('action.joystick', np.float32, (2,)), ('action.buttons', np.uint8, (14,))]
+    field_defs = [
+        ('frame_index', np.uint32, ()),
+        ('action.joystick', np.float32, (2,)),
+        ('action.buttons', np.uint8, (14,)),
+        ('info.level', np.uint8, ()),
+    ]
+
+    # Header follows the spec defined in lakitu/datasets/dataset.py
     fields = [{'name': name, 'dtype': np.dtype(dtype).name, 'shape': shape} for name, dtype, shape in field_defs]
     header = json.dumps(fields).encode('utf-8')
     header = struct.pack('<I', len(header)) + header
@@ -153,15 +161,17 @@ def encode(data_queue, savestate_path):
     frame_count = 0
     with open(data_path, 'wb') as f:
         f.write(header)
+
         while (data := data_queue.get()) is not None:
-            frame, controller_states, _ = data
+            frame, controller_states, info = data
             frame = cv2.resize(frame[::-1], (width, height))
             av_frame = av.VideoFrame.from_ndarray(frame, format='rgb24')
             packet = stream.encode(av_frame)
             container.mux(packet)
+
             joystick = [float(getattr(controller_states[0], field)) / 127 for field in M64pButtons.get_joystick_fields()]
             buttons = [int(getattr(controller_states[0], field)) for field in M64pButtons.get_button_fields()]
-            row = struct.pack('<I2f14B', frame_count, *joystick, *buttons)
+            row = struct.pack('<I2f14B1B', frame_count, *joystick, *buttons, info['level'])
             assert len(row) == row_size, f"Row size mismatch: {len(row)} != {row_size}"
             f.write(row)
             frame_count += 1
@@ -186,6 +196,7 @@ if __name__ == '__main__':
         raise FileNotFoundError(f"Savestate file {args.savestate!r} does not exist")
 
     # Create the encoder thread
+    data_queue = None
     ctx = multiprocessing.get_context('spawn')
     if args.record:
         data_queue = ctx.Queue()
@@ -194,7 +205,7 @@ if __name__ == '__main__':
 
     # Load the core and plugins
     core = Core()
-    input_extension = KeyboardInputExtension(core, data_queue=data_queue if args.record else None, savestate_path=args.savestate)
+    input_extension = KeyboardInputExtension(core, data_queue, args.savestate, info_hooks={'level': m64_get_level})
     video_extension = VideoExtension(input_extension)
     core.core_startup(vidext=video_extension, inputext=input_extension)
     core.load_plugins()
@@ -213,6 +224,7 @@ if __name__ == '__main__':
 
     # Cleanup
     if args.record:
+        assert data_queue is not None  # make mypy happy
         data_queue.put(None)
         encoder_thread.join()
     core.detach_plugins()
