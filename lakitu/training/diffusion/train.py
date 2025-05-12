@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-import json
 import time
 from dataclasses import dataclass, field, asdict, replace
 from datetime import datetime
@@ -12,6 +11,7 @@ from torch.optim import Optimizer
 from lakitu.datasets.dataset import EpisodeDataset
 from lakitu.training.diffusion.eval import EvalConfig, eval_policy, set_seed
 from lakitu.training.diffusion.policy import DiffusionConfig, DiffusionPolicy
+from lakitu.training.helpers.checkpoint import save_checkpoint
 from lakitu.training.helpers.config import BaseConfig
 from lakitu.training.helpers.metrics import AverageMeter, MetricsTracker, format_big_number
 from lakitu.training.helpers.wandb import WandBLogger, WandBConfig
@@ -20,23 +20,9 @@ OUTPUT_DIR = Path(__file__).parents[1] / "experiments"
 LRScheduler = Any
 
 @dataclass
-class ImageTransformConfig:
-    weight: float = 1.0
-    type: str = "Identity"
-    kwargs: dict[str, Any] = field(default_factory=dict)
-
-@dataclass
-class ImageTransformsConfig:
-    enable: bool = False
-    max_num_transforms: int = 3
-    random_order: bool = False
-    tfs: dict[str, ImageTransformConfig] = field(default_factory=dict)
-
-@dataclass
 class DatasetConfig:
     data_dir: Path = Path(__file__).parent.parent / 'data' / 'episodes'
     episodes: list[int] | None = None
-    image_transforms: ImageTransformsConfig = field(default_factory=ImageTransformsConfig)
 
 @dataclass
 class AdamConfig:
@@ -105,16 +91,6 @@ class EpisodeAwareSampler:
         return len(self.indices)
 
 
-def flatten_dict(d: dict, parent_key: str = "", sep: str = "/") -> dict:
-    items: list = []
-    for k, v in d.items():
-        new_key = f"{parent_key}{sep}{k}" if parent_key else k
-        if isinstance(v, dict):
-            items.extend(flatten_dict(v, new_key, sep=sep).items())
-        else:
-            items.append((new_key, v))
-    return dict(items)
-
 def resolve_delta_timestamps(cfg: DiffusionConfig) -> dict[str, list[int]]:
     delta_timestamps = {}
     for key in cfg.input_features.keys() | cfg.output_features.keys():
@@ -128,41 +104,6 @@ def get_step_identifier(step: int, total_steps: int) -> str:
     num_digits = max(6, len(str(total_steps)))
     return f"{step:0{num_digits}d}"
 
-
-def save_checkpoint(
-    checkpoint_dir: Path,
-    step: int,
-    cfg: TrainConfig,
-    policy: DiffusionPolicy,
-    optimizer: Optimizer,
-    scheduler: LRScheduler,
-) -> None:
-    import safetensors
-
-    pretrained_dir = checkpoint_dir / 'pretrained_model'
-    pretrained_dir.mkdir(parents=True, exist_ok=True)
-    safetensors.torch.save_file(policy.state_dict(), str(pretrained_dir / "model.safetensors"))
-    with open(pretrained_dir / "train_config.json", "w") as f:
-        json.dump(asdict(cfg), f, indent=2, default=lambda x: str(x) if isinstance(x, Path) else x)
-
-    save_dir = checkpoint_dir / 'training_state'
-    save_dir.mkdir(parents=True, exist_ok=True)
-    with open(save_dir / "training_step.json", "w") as f:
-        json.dump({"step": step}, f, indent=2)
-
-    if optimizer is not None:
-        state = optimizer.state_dict()
-        param_groups = state.pop("param_groups")
-        flat_state = flatten_dict(state)
-        safetensors.torch.save_file(flat_state, save_dir / "optimizer_state.safetensors")
-        with open(save_dir / "optimizer_param_groups.json", "w") as f:
-            json.dump(param_groups, f, indent=2)
-    if scheduler is not None:
-
-        state_dict = scheduler.state_dict()
-        with open(save_dir / "scheduler_state.json", "w") as f:
-            json.dump(state_dict, f, indent=2)
-
 def cycle(iterable):
     iterator = iter(iterable)
     while True:
@@ -170,17 +111,6 @@ def cycle(iterable):
             yield next(iterator)
         except StopIteration:
             iterator = iter(iterable)
-
-def make_optimizer_and_scheduler(cfg: TrainConfig, policy: DiffusionPolicy) -> tuple[Optimizer, LRScheduler]:
-    kwargs = {k: v for k, v in asdict(cfg.optimizer).items() if k not in ("type", "grad_clip_norm")}
-    optimizer = torch.optim.Adam(policy.parameters(), **kwargs)
-
-    from diffusers.optimization import get_scheduler
-    kwargs = {k: v for k, v in asdict(cfg.scheduler).items() if k != 'type'}
-    kwargs = kwargs | {"num_training_steps": cfg.steps, "optimizer": optimizer}
-    lr_scheduler = get_scheduler(**kwargs)
-
-    return optimizer, lr_scheduler
 
 
 def update_policy(
@@ -219,7 +149,6 @@ def update_policy(
 
 
 def train(cfg: TrainConfig) -> None:
-    # print(json.dumps(asdict(cfg), indent=2))
     wandb_logger = WandBLogger(replace(cfg.wandb, resume=cfg.resume, output_dir=cfg.output_dir), cfg) if cfg.wandb.enable else None
 
     if cfg.seed is not None:
@@ -243,7 +172,13 @@ def train(cfg: TrainConfig) -> None:
     policy = DiffusionPolicy(cfg.policy).to(cfg.policy.device)
 
     print("Creating optimizer and scheduler")
-    optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy)
+    kwargs = {k: v for k, v in asdict(cfg.optimizer).items() if k not in ("type", "grad_clip_norm")}
+    optimizer = torch.optim.Adam(policy.parameters(), **kwargs)
+
+    from diffusers.optimization import get_scheduler
+    kwargs = {k: v for k, v in asdict(cfg.scheduler).items() if k != 'type'}
+    kwargs = kwargs | {"num_training_steps": cfg.steps, "optimizer": optimizer}
+    lr_scheduler = get_scheduler(**kwargs)
 
     step = 0  # number of policy updates (forward + backward + optim)
 
