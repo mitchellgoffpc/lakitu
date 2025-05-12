@@ -1,7 +1,4 @@
 #!/usr/bin/env python
-import os
-import re
-import glob
 import json
 import time
 from dataclasses import dataclass, field, asdict, replace
@@ -13,7 +10,8 @@ import torch
 from torch.optim import Optimizer
 
 from lakitu.datasets.dataset import EpisodeDataset
-from lakitu.training.helpers import BaseConfig
+from lakitu.training.helpers.config import BaseConfig
+from lakitu.training.helpers.wandb import WandBLogger, WandBConfig
 from lakitu.training.diffusion.eval import EvalConfig, eval_policy, set_seed
 from lakitu.training.diffusion.policy import DiffusionConfig, DiffusionPolicy
 
@@ -38,18 +36,6 @@ class DatasetConfig:
     data_dir: Path = Path(__file__).parent.parent / 'data' / 'episodes'
     episodes: list[int] | None = None
     image_transforms: ImageTransformsConfig = field(default_factory=ImageTransformsConfig)
-
-@dataclass
-class WandBConfig:
-    enable: bool = False
-    silent: bool = True
-    disable_artifact: bool = False
-    project: str = "mario64"
-    entity: str | None = None
-    notes: str | None = None
-    run_id: str | None = None
-    job_name: str | None = None
-    mode: str | None = None  # Allowed values: 'online', 'offline' 'disabled'. Defaults to 'online'
 
 @dataclass
 class AdamConfig:
@@ -190,28 +176,22 @@ class MetricsTracker:
         else:
             raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
 
+    def __str__(self) -> str:
+        return " ".join([
+            f"step:{format_big_number(self.steps)}",
+            f"smpl:{format_big_number(self.samples)}",
+            f"ep:{format_big_number(self.episodes)}",
+            f"epch:{self.epochs:.2f}",
+            *[str(m) for m in self.metrics.values()],
+        ])
+
     def step(self) -> None:
-        """Updates metrics that depend on 'step' for one step."""
         self.steps += 1
         self.samples += self._batch_size
         self.episodes = self.samples / self._avg_samples_per_ep
         self.epochs = self.samples / self._num_frames
 
-    def __str__(self) -> str:
-        display_list = [
-            f"step:{format_big_number(self.steps)}",
-            # number of samples seen during training
-            f"smpl:{format_big_number(self.samples)}",
-            # number of episodes seen during training
-            f"ep:{format_big_number(self.episodes)}",
-            # number of time all unique samples are seen
-            f"epch:{self.epochs:.2f}",
-            *[str(m) for m in self.metrics.values()],
-        ]
-        return " ".join(display_list)
-
     def to_dict(self, use_avg: bool = True) -> dict[str, int | float]:
-        """Returns the current metric values (or averages if `use_avg=True`) as a dict."""
         return {
             "steps": self.steps,
             "samples": self.samples,
@@ -221,89 +201,9 @@ class MetricsTracker:
         }
 
     def reset_averages(self) -> None:
-        """Resets average meters."""
         for m in self.metrics.values():
             m.reset()
 
-
-class WandBLogger:
-    """A helper class to log object using wandb."""
-
-    def __init__(self, cfg: TrainConfig):
-        self.cfg = cfg.wandb
-        self.log_dir = cfg.output_dir
-        self.env_fps = cfg.eval.env.fps
-
-        # Set up WandB
-        if cfg.wandb.silent:
-            os.environ["WANDB_SILENT"] = "True"
-        import wandb
-
-        if cfg.wandb.run_id:
-            wandb_run_id = cfg.wandb.run_id
-        elif cfg.resume:
-            wandb_run_id = get_wandb_run_id_from_filesystem(self.log_dir)
-        else:
-            wandb_run_id = None
-
-        wandb.init(
-            id=wandb_run_id,
-            project=self.cfg.project,
-            entity=self.cfg.entity,
-            name=self.cfg.job_name,
-            notes=self.cfg.notes,
-            dir=self.log_dir,
-            config=asdict(cfg),
-            # TODO(rcadene): try set to True
-            save_code=False,
-            # TODO(rcadene): split train and eval, and run async eval with job_type="eval"
-            job_type="train_eval",
-            resume="must" if cfg.resume else None,
-            mode=self.cfg.mode if self.cfg.mode in ["online", "offline", "disabled"] else "online",
-        )
-        print(f"Track this run --> {wandb.run.url}")
-        self._wandb = wandb
-
-    def log_policy(self, checkpoint_dir: Path) -> None:
-        """Checkpoints the policy to wandb."""
-        if self.cfg.disable_artifact:
-            return
-
-        step_id = checkpoint_dir.name
-        artifact_name = f"{step_id}"
-        artifact_name = artifact_name.replace(":", "_").replace("/", "_")  # WandB artifacts don't accept ":" or "/" in their name.
-        artifact = self._wandb.Artifact(artifact_name, type="model")
-        artifact.add_file(checkpoint_dir / 'pretrained_model' / 'model.safetensors')
-        self._wandb.log_artifact(artifact)
-
-    def log_dict(self, d: dict, step: int, mode: str = "train") -> None:
-        if mode not in {"train", "eval"}:
-            raise ValueError(mode)
-
-        for k, v in d.items():
-            if not isinstance(v, (int, float, str)):
-                print(f'WandB logging of key "{k}" was ignored as its type is not handled by this wrapper.')
-                continue
-            self._wandb.log({f"{mode}/{k}": v}, step=step)
-
-    def log_video(self, video_path: str, step: int, mode: str = "train") -> None:
-        if mode not in {"train", "eval"}:
-            raise ValueError(mode)
-
-        wandb_video = self._wandb.Video(video_path, fps=self.env_fps, format="mp4")
-        self._wandb.log({f"{mode}/video": wandb_video}, step=step)
-
-
-def get_wandb_run_id_from_filesystem(log_dir: Path) -> str:
-    paths = glob.glob(str(log_dir / "wandb/latest-run/run-*"))
-    if len(paths) != 1:
-        raise RuntimeError("Couldn't get the previous WandB run ID for run resumption.")
-    match = re.search(r"run-([^\.]+).wandb", paths[0].split("/")[-1])
-    if match is None:
-        raise RuntimeError("Couldn't get the previous WandB run ID for run resumption.")
-    wandb_run_id = match.groups(0)[0]
-    assert isinstance(wandb_run_id, str)  # to make mypy happy
-    return wandb_run_id
 
 def flatten_dict(d: dict, parent_key: str = "", sep: str = "/") -> dict:
     items: list = []
@@ -431,7 +331,7 @@ def update_policy(
 
 def train(cfg: TrainConfig) -> None:
     # print(json.dumps(asdict(cfg), indent=2))
-    wandb_logger = WandBLogger(cfg) if cfg.wandb.enable else None
+    wandb_logger = WandBLogger(replace(cfg.wandb, resume=cfg.resume, output_dir=cfg.output_dir), cfg) if cfg.wandb.enable else None
 
     if cfg.seed is not None:
         set_seed(cfg.seed)

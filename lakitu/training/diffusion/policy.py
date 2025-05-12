@@ -15,7 +15,7 @@ from torch import Tensor
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 
-from lakitu.training.helpers import BaseConfig
+from lakitu.training.helpers.config import BaseConfig
 
 IMAGENET_STATS = {
     "mean": [0.485, 0.456, 0.406],
