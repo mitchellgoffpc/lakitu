@@ -19,8 +19,8 @@ from lakitu.training.diffusion.policy import DiffusionPolicy
 
 @dataclass
 class EnvConfig:
-    rom_path: Path = Path(__file__).parents[2] / "Super Mario 64 (USA).z64"
-    savestate_path: Path | None = Path(__file__).parents[1] / "data" / "savestates" / "savestate_0.m64p"
+    rom_path: Path = Path(__file__).parents[3] / "Super Mario 64 (USA).z64"
+    savestate_path: Path | None = Path(__file__).parents[2] / "data" / "savestates" / "courtyard.m64p"
     render_mode: str = "rgb_array"
     episode_length: int = 1000
     fps: int = 30
@@ -72,26 +72,29 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def rollout(env: gym.vector.AsyncVectorEnv, policy: DiffusionPolicy, seeds: list[int], output_paths: list[Path]) -> dict:
+def rollout(env: gym.vector.AsyncVectorEnv, policy: DiffusionPolicy, output_dir: Path | None, seed: int, indices: list[int]) -> dict:
     observation: np.ndarray
     reward: np.ndarray
 
     device = torch.device(policy.config.device)
     policy.reset()
-    observation, info = env.reset(seed=seeds)
+    observation, info = env.reset(seed=[seed + idx for idx in indices])
 
     containers = []
     streams = []
-    for output_path in output_paths:
-        width, height, fps = 320, 240, 30
-        container = av.open(str(output_path), mode='w')
-        stream = container.add_stream('h264', rate=fps)
-        stream.width = width
-        stream.height = height
-        stream.pix_fmt = 'yuv420p'
-        stream.codec_context.options = {'crf': '23', 'g': '30'}
-        containers.append(container)
-        streams.append(stream)
+    if output_dir:
+        video_dir = output_dir / "videos"
+        video_dir.mkdir(parents=True, exist_ok=True)
+        for idx in indices:
+            width, height, fps = 320, 240, 30
+            container = av.open(str(video_dir / f"{idx:05d}.mp4"), mode='w')
+            stream = container.add_stream('h264', rate=fps)
+            stream.width = width
+            stream.height = height
+            stream.pix_fmt = 'yuv420p'
+            stream.codec_context.options = {'crf': '23', 'g': '30'}
+            containers.append(container)
+            streams.append(stream)
 
     all_actions = []
     all_rewards = []
@@ -108,7 +111,7 @@ def rollout(env: gym.vector.AsyncVectorEnv, policy: DiffusionPolicy, seeds: list
         action_tensor = policy.select_action({'observation.image': observation_tensor})
         action = {k.removeprefix("action."): v.cpu().numpy() for k, v in action_tensor.items()}
 
-        if output_paths:
+        if output_dir:
             for frame, container, stream in zip(observation, containers, streams, strict=True):
                 packet = stream.encode(av.VideoFrame.from_ndarray(frame.astype(np.uint8), format='rgb24'))
                 container.mux(packet)
@@ -125,6 +128,16 @@ def rollout(env: gym.vector.AsyncVectorEnv, policy: DiffusionPolicy, seeds: list
         running_success_rate = einops.reduce(torch.stack(all_successes, dim=1), "b n -> b", "any").numpy().mean()
         progbar.set_postfix({"running_success_rate": f"{running_success_rate.item() * 100:.1f}%"})
         progbar.update()
+
+    # AsyncVectorEnv.call doesn't support different args for differnet workers
+    if output_dir:
+        savestate_dir = output_dir / "savestates"
+        savestate_dir.mkdir(parents=True, exist_ok=True)
+        for pipe, idx in zip(env.parent_pipes, indices, strict=True):
+            pipe.send(("_call", ('savestate', [savestate_dir / f"{idx:05d}.m64p"], {})))
+        env._state = gym.vector.async_vector_env.AsyncState.WAITING_CALL
+        env.call_wait()
+        env.reset()  # Seems like savestates won't be written until we run another step
 
     for container, stream in zip(containers, streams, strict=True):
         packet = stream.encode(None)
@@ -145,7 +158,6 @@ def eval_policy(config: EvalConfig, policy: DiffusionPolicy) -> dict:
 
     policy.eval()
     start = time.time()
-    start_seed = config.seed
     num_episodes = config.num_episodes
     n_batches = int(math.ceil(num_episodes / env.num_envs))
     if config.output_dir:
@@ -156,13 +168,10 @@ def eval_policy(config: EvalConfig, policy: DiffusionPolicy) -> dict:
     sum_rewards = []
     max_rewards = []
     all_successes = []
-    all_seeds = []
 
     for batch_idx in range(n_batches):
         start_idx, end_idx = batch_idx * env.num_envs, (batch_idx + 1) * env.num_envs
-        output_paths = [config.output_dir / f"episode_{i}.mp4" for i in range(start_idx, end_idx)] if config.output_dir else []
-        seeds = list(range(start_seed + start_idx, start_seed + end_idx))
-        rollout_data = rollout(env, policy, seeds=seeds, output_paths=output_paths)
+        rollout_data = rollout(env, policy, config.output_dir, seed=config.seed, indices=list(range(start_idx, end_idx)))
 
         # Figure out where in each rollout sequence the first done condition was encountered (results after this won't be included).
         n_steps = rollout_data["done"].shape[1]
@@ -175,15 +184,14 @@ def eval_policy(config: EvalConfig, policy: DiffusionPolicy) -> dict:
         sum_rewards.extend(einops.reduce((rollout_data["reward"] * mask), "b n -> b", "sum").tolist())
         max_rewards.extend(einops.reduce((rollout_data["reward"] * mask), "b n -> b", "max").tolist())
         all_successes.extend(einops.reduce((rollout_data["success"] * mask), "b n -> b", "any").tolist())
-        all_seeds.extend(seeds)
 
     env.close()
 
     return {
         "per_episode": [
-            {"episode_idx": i, "sum_reward": sum_reward, "max_reward": max_reward, "success": success, "seed": seed}
-                for i, (sum_reward, max_reward, success, seed)
-                in enumerate(zip(sum_rewards, max_rewards, all_successes, all_seeds, strict=True))
+            {"episode_idx": i, "sum_reward": sum_reward, "max_reward": max_reward, "success": success}
+                for i, (sum_reward, max_reward, success)
+                in enumerate(zip(sum_rewards, max_rewards, all_successes, strict=True))
         ][:num_episodes],
         "aggregated": {
             "avg_sum_reward": float(np.nanmean(sum_rewards[:num_episodes])),

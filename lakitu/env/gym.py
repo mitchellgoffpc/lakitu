@@ -23,13 +23,20 @@ class RemoteInputExtension(InputExtension):
     def get_controller_states(self):
         controller_states = [M64pButtons() for _ in range(4)]
         next_input = self.input_queue.get()
-        if next_input == "STOP":
-            self.core.stop()
-        elif next_input == "RESET":
-            self.core.reset()
-        else:
-            for i, state in enumerate(next_input):
-                controller_states[i] = state
+        match next_input:
+            case "STOP":
+                self.core.stop()
+            case "RESET":
+                self.core.reset()
+            case ("SAVE", savestate_path):
+                savestate_path.parent.mkdir(parents=True, exist_ok=True)
+                self.core.state_save(str(savestate_path))
+                return self.get_controller_states()  # Wait for the next input
+            case list(states):
+                for i, state in enumerate(states):
+                    controller_states[i] = state
+            case _:
+                raise ValueError(f"Received unknown command in RemoteInputExtension: {next_input}")
         return controller_states
 
 
@@ -162,6 +169,11 @@ class N64Env(gym.Env):
             self.input_queue.get_nowait()
         while not self.data_queue.empty():
             self.data_queue.get_nowait()
+
+    def savestate(self, path):
+        """Save the current state of the emulator"""
+        if self.emulator_proc and self.emulator_proc.is_alive():
+            self.input_queue.put(("SAVE", path))
 
 
 # Info hooks

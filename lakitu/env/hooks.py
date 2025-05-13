@@ -78,7 +78,14 @@ class VideoExtension:
             glfw.window_hint(glfw.DOUBLEBUFFER, self.gl_doublebuffer)
             if sys.platform == "darwin":
                 glfw.window_hint(glfw.COCOA_RETINA_FRAMEBUFFER, glfw.FALSE)
-                glfw.window_hint(glfw.COCOA_MENUBAR, glfw.FALSE if self.offscreen else glfw.TRUE)
+
+            if sys.platform == "darwin" and self.offscreen:
+                try:
+                    # https://stackoverflow.com/questions/6744633/hide-python-launcher-icon-for-new-qapplication
+                    import AppKit
+                    AppKit.NSApp.setActivationPolicy_(2)  # NSApplicationActivationPolicyProhibited
+                except ImportError:
+                    print("Warning: PyObjC is not available, unable to hide glfw dock icon.")
 
             # Create a window
             self.window = glfw.create_window(640, 480, "M64Py", None, None)
