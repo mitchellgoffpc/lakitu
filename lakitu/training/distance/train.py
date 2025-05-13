@@ -132,7 +132,17 @@ def train(cfg: TrainConfig) -> None:
     num_frames = sum(len(ep.data) for ep in dataset.episodes.values())
 
     print("Creating model")
-    model = DistanceEstimator(cfg.model).to(cfg.model.device)
+    if cfg.resume:
+        print(f"Resuming from checkpoint {cfg.output_dir}")
+        checkpoints_dir = Path(cfg.output_dir) / 'checkpoints'
+        step = int(sorted(checkpoints_dir.iterdir(), reverse=True)[0].name)
+        checkpoint_dir = checkpoints_dir / get_step_identifier(step, cfg.steps) / 'pretrained_model'
+        if not checkpoint_dir.exists():
+            raise ValueError(f"Checkpoint directory {checkpoint_dir} does not exist")
+        model = DistanceEstimator.from_pretrained(checkpoint_dir, device=device)
+    else:
+        model = DistanceEstimator(cfg.model).to(device)
+        step = 0
 
     print("Creating optimizer and scheduler")
     kwargs = {k: v for k, v in asdict(cfg.optimizer).items() if k not in ("type", "grad_clip_norm")}
@@ -142,11 +152,6 @@ def train(cfg: TrainConfig) -> None:
     kwargs = {k: v for k, v in asdict(cfg.scheduler).items() if k != 'type'}
     kwargs = kwargs | {"num_training_steps": cfg.steps, "optimizer": optimizer}
     lr_scheduler = get_scheduler(**kwargs)
-
-    step = 0  # number of model updates (forward + backward + optim)
-
-    if cfg.resume:
-        raise RuntimeError("Resuming training is not supported yet")
 
     num_learnable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     num_total_params = sum(p.numel() for p in model.parameters())
