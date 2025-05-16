@@ -162,10 +162,15 @@ def encode(data_queue, savestate_path):
             packet = stream.encode(av_frame)
             container.mux(packet)
 
-            joystick = np.array([float(getattr(controller_states[0], field)) / 127 for field in M64pButtons.get_joystick_fields()])
-            buttons = np.array([int(getattr(controller_states[0], field)) for field in M64pButtons.get_button_fields()])
-            actions = {'action.joystick': joystick, 'action.buttons': buttons}
-            writer.writerow({'frame_index': np.array(frame_count), **actions, 'info.level': np.array(info['level'])})
+            joystick = [float(getattr(controller_states[0], field)) / 127 for field in M64pButtons.get_joystick_fields()]
+            buttons = [int(getattr(controller_states[0], field)) for field in M64pButtons.get_button_fields()]
+            writer.writerow({
+                'frame_index': np.array(frame_count, dtype=np.uint32),
+                'action.joystick': np.array(joystick, dtype=np.float32),
+                'action.buttons': np.array(buttons, dtype=np.uint8),
+                'info.level': np.array(info['level'], dtype=np.uint8)
+            })
+
             frame_count += 1
 
     packet = stream.encode(None)
