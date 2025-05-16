@@ -1,8 +1,6 @@
 import argparse
 import datetime
-import json
 import multiprocessing
-import struct
 import shutil
 import threading
 from pathlib import Path
@@ -17,6 +15,7 @@ from lakitu.env.core import Core
 from lakitu.env.defs import PluginType, ErrorType, M64pButtons
 from lakitu.env.gym import m64_get_level
 from lakitu.env.hooks import VideoExtension, InputExtension
+from lakitu.datasets.format import Field, Writer
 
 KEYBOARD_AXES = {
     'X_AXIS': {glfw.KEY_LEFT: -1, glfw.KEY_RIGHT: 1},
@@ -145,22 +144,16 @@ def encode(data_queue, savestate_path):
     stream.codec_context.options = {'crf': '23', 'g': '10'}
 
     data_path = result_path / 'episode.data'
-    field_defs = [
-        ('frame_index', np.uint32, ()),
-        ('action.joystick', np.float32, (2,)),
-        ('action.buttons', np.uint8, (14,)),
-        ('info.level', np.uint8, ()),
+    fields: list[Field] = [
+        ('frame_index', np.dtype(np.uint32), ()),
+        ('action.joystick', np.dtype(np.float32), (2,)),
+        ('action.buttons', np.dtype(np.uint8), (14,)),
+        ('info.level', np.dtype(np.uint8), ()),
     ]
-
-    # Header follows the spec defined in lakitu/datasets/dataset.py
-    fields = [{'name': name, 'dtype': np.dtype(dtype).name, 'shape': shape} for name, dtype, shape in field_defs]
-    header = json.dumps(fields).encode('utf-8')
-    header = struct.pack('<I', len(header)) + header
-    row_size = sum(np.dtype(dtype).itemsize * (np.prod(shape) if shape else 1) for _, dtype, shape in field_defs)
 
     frame_count = 0
     with open(data_path, 'wb') as f:
-        f.write(header)
+        writer = Writer(f, fields)
 
         while (data := data_queue.get()) is not None:
             frame, controller_states, info = data
@@ -169,11 +162,10 @@ def encode(data_queue, savestate_path):
             packet = stream.encode(av_frame)
             container.mux(packet)
 
-            joystick = [float(getattr(controller_states[0], field)) / 127 for field in M64pButtons.get_joystick_fields()]
-            buttons = [int(getattr(controller_states[0], field)) for field in M64pButtons.get_button_fields()]
-            row = struct.pack('<I2f14B1B', frame_count, *joystick, *buttons, info['level'])
-            assert len(row) == row_size, f"Row size mismatch: {len(row)} != {row_size}"
-            f.write(row)
+            joystick = np.array([float(getattr(controller_states[0], field)) / 127 for field in M64pButtons.get_joystick_fields()])
+            buttons = np.array([int(getattr(controller_states[0], field)) for field in M64pButtons.get_button_fields()])
+            actions = {'action.joystick': joystick, 'action.buttons': buttons}
+            writer.writerow({'frame_index': np.array(frame_count), **actions, 'info.level': np.array(info['level'])})
             frame_count += 1
 
     packet = stream.encode(None)

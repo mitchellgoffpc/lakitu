@@ -58,5 +58,5 @@ cache_dir = "/dev/null"
 exclude = ["^lakitu/env/lib"]
 
 [[tool.mypy.overrides]]
-module = "glfw,hid,torchvision"
+module = "glfw,hid,torchvision,wandb"
 ignore_missing_imports = true

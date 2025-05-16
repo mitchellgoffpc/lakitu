@@ -1,8 +1,10 @@
 import av
-import unittest
 import numpy as np
+import unittest
 from pathlib import Path
-from lakitu.datasets.dataset import EpisodeDataset, load_episode_data
+
+from lakitu.datasets.dataset import EpisodeDataset
+from lakitu.datasets.format import load_data
 
 class TestEpisodeDataset(unittest.TestCase):
     def setUp(self):
@@ -15,7 +17,7 @@ class TestEpisodeDataset(unittest.TestCase):
 
         container = av.open(self.episode_dir / "episode.mp4")
         self.frames = [frame.to_ndarray(format='rgb24') for frame in container.decode(video=0)]
-        self.actions = load_episode_data(self.episode_dir / "episode.data")['action.buttons']
+        self.actions = load_data(self.episode_dir / "episode.data")['action.buttons']
 
     def create_dataset(self, frames_per_sample=1):
         deltas = list(range(frames_per_sample))

@@ -67,6 +67,7 @@ def emulator_process(rom_path, savestate_path, input_queue, data_queue, info_hoo
 
 class N64Env(gym.Env):
     """Gymnasium environment for N64"""
+    action_space: gym.spaces.Dict
     metadata = {"render_modes": ["rgb_array"], "render_fps": 30}
 
     def __init__(self, rom_path, savestate_path=None, render_mode=None, info_hooks=None):
@@ -187,12 +188,14 @@ def m64_get_level(core):
 
 if __name__ == "__main__":
     import argparse
-    import pygame
-    import einops
-    import torch
     import cv2
+    import einops
+    import pygame
+    import torch
+
     from lakitu.training.diffusion.policy import DiffusionPolicy
-    from lakitu.datasets.dataset import load_episode_data, draw_actions, draw_info
+    from lakitu.datasets.dataset import draw_actions, draw_info
+    from lakitu.datasets.format import load_data
 
     parser = argparse.ArgumentParser(description='Run N64 Gym Environment')
     parser.add_argument('rom_path', type=str, help='Path to the ROM file')
@@ -216,7 +219,7 @@ if __name__ == "__main__":
         policy = DiffusionPolicy.from_pretrained(Path(args.policy))
         policy.reset()
     elif args.replay:
-        episode_data = load_episode_data(Path(args.replay) / 'episode.data')
+        episode_data = load_data(Path(args.replay) / 'episode.data')
 
     frame_idx = 0
     while True:

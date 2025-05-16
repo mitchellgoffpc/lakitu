@@ -8,7 +8,6 @@ from typing import Any
 
 import numpy as np
 import torch
-from torch import Tensor
 from torch.optim import Optimizer
 
 from lakitu.datasets.dataset import EpisodeDataset
@@ -87,7 +86,7 @@ def update_model(
     optimizer: Optimizer,
     lr_scheduler: LRScheduler,
     grad_clip_norm: float,
-) -> tuple[MetricsTracker, dict[str, Tensor]]:
+) -> tuple[MetricsTracker, dict[str, float]]:
     start_time = time.perf_counter()
     model.train()
 
@@ -112,7 +111,7 @@ def update_model(
         train_metrics.grad_norm = grad_norm.item()
         train_metrics.lr = optimizer.param_groups[0]["lr"]
         train_metrics.update_s = time.perf_counter() - start_time
-    return train_metrics, output_dict
+    return train_metrics, {k: v.item() for k, v in output_dict.items()}
 
 
 def train(cfg: TrainConfig) -> None:
