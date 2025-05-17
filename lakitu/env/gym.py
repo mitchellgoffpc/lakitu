@@ -128,6 +128,13 @@ class N64Env(gym.Env):
         if not self.emulator_proc.is_alive():
             raise RuntimeError("Emulator process has died")
 
+        if not isinstance(action, dict):
+            raise ValueError("action must be a dictionary")
+        if not isinstance(action['joystick'], np.ndarray) or action['joystick'].dtype != np.float32:
+            raise ValueError("action['joystick'] must be an array with dtype float32")
+        if not isinstance(action['buttons'], np.ndarray) or action['buttons'].dtype != bool:
+            raise ValueError("action['buttons'] must be an array with dtype bool")
+
         # Create controller state
         joystick = action['joystick']
         magnitude = np.linalg.norm(joystick)
@@ -216,7 +223,7 @@ if __name__ == "__main__":
     observation, info = env.reset()
 
     if args.policy:
-        policy = DiffusionPolicy.from_pretrained(Path(args.policy))
+        policy = DiffusionPolicy.from_pretrained(Path(args.policy), device='cuda' if torch.cuda.is_available() else 'cpu')
         policy.reset()
     elif args.replay:
         episode_data = load_data(Path(args.replay) / 'episode.data')
