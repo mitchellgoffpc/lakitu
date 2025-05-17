@@ -1,3 +1,5 @@
+from __future__ import annotations  # needed for ctypes._Pointer
+
 import sys
 import glfw
 import ctypes as C
