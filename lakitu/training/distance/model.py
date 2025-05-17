@@ -11,7 +11,7 @@ import torchvision
 from torch import Tensor
 
 from lakitu.training.helpers.config import BaseConfig
-from lakitu.training.diffusion.policy import PolicyFeature, FeatureType, NormalizationMode
+from lakitu.training.diffusion.policy import PolicyFeature, FeatureType, NormalizationMode, DType
 
 @dataclass
 class DistanceEstimatorConfig(BaseConfig):
@@ -19,10 +19,12 @@ class DistanceEstimatorConfig(BaseConfig):
     n_obs_steps: int = 2
 
     input_features: dict[str, PolicyFeature] = field(default_factory=lambda: {
-        "observation.image": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 240, 320), norm_mode=NormalizationMode.IDENTITY),
+        "observation.image": PolicyFeature(
+            type=FeatureType.VISUAL, shape=(3, 240, 320), dtype=DType.FLOAT, norm_mode=NormalizationMode.IDENTITY
+        ),
     })
     output_features: dict[str, PolicyFeature] = field(default_factory=lambda: {
-        "state.distance": PolicyFeature(type=FeatureType.STATE, shape=(7,), norm_mode=NormalizationMode.IDENTITY),
+        "state.distance": PolicyFeature(type=FeatureType.STATE, shape=(7,), dtype=DType.FLOAT, norm_mode=NormalizationMode.IDENTITY),
     })
 
     vision_backbone: str = "resnet18"

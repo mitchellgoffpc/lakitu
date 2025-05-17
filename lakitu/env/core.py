@@ -43,10 +43,10 @@ ROM_TYPE = {
 }
 
 PLUGIN_NAMES = {
-    PluginType.RSP: "RSP",
-    PluginType.GFX: "Video",
-    PluginType.AUDIO: "Audio",
-    PluginType.INPUT: "Input"
+    PluginType.RSP: b"RSP",
+    PluginType.GFX: b"Video",
+    PluginType.AUDIO: b"Audio",
+    PluginType.INPUT: b"Input"
 }
 
 PLUGIN_PATHS = {
@@ -75,7 +75,7 @@ class Core:
 
     def __init__(self, log_level: int = LogLevel.INFO) -> None:
         self.plugins: list[int] = []
-        self.plugin_map: dict[int, tuple[C.CDLL, str, str, str, int]] = {}
+        self.plugin_map: dict[int, tuple[C.CDLL, str, bytes, str, int]] = {}
         self.inputext: Optional['InputExtension'] = None
         self.rom_header = M64pRomHeader()
         self.rom_settings = M64pRomSettings()
@@ -139,13 +139,10 @@ class Core:
 
     def handle_log_message(self, context: bytes, level: int, message: bytes) -> None:
         """Callback to handle log messages from the core."""
-        try:
-            if any(context.decode() == ctx and message.decode().startswith(msg) for ctx, msg in SKIP_MESSAGES):
-                return
-            if self.log_level >= level:
-                sys.stderr.write(f"{context.decode()}: {message.decode()}\n")
-        except UnicodeDecodeError:
-            sys.stderr.write(f"{context!r}: {message!r}\n")
+        if any(context.decode() == ctx and message.decode().startswith(msg) for ctx, msg in SKIP_MESSAGES):
+            return
+        if self.log_level >= level:
+            sys.stderr.write(f"{context.decode()}: {message.decode()}\n")
 
     def handle_state_update(self, context: bytes, param: int, value: int) -> None:
         """Callback to handle state updates from the core."""
@@ -230,7 +227,7 @@ class Core:
     def plugin_startup(self, plugin_type: int) -> None:
         """Initializes the specified plugin and sets up the logging callback."""
         plugin_handle, _, plugin_name, plugin_desc, _ = self.plugin_map[plugin_type]
-        rval = plugin_handle.PluginStartup(C.c_void_p(self.m64p._handle), plugin_name.encode(), self.logging_callback)
+        rval = plugin_handle.PluginStartup(C.c_void_p(self.m64p._handle), plugin_name, self.logging_callback)
         if rval != ErrorType.SUCCESS:
             log.debug("plugin_startup()")
             log.warning(self.error_message(rval))
@@ -257,9 +254,9 @@ class Core:
             if rval != ErrorType.SUCCESS:
                 log.debug("attach_plugins()")
                 log.warning(self.error_message(rval))
-                log.warning(f"core failed to attach {plugin_name} plugin.")
+                log.warning(f"core failed to attach {plugin_name.decode()} plugin.")
             else:
-                log.info(f"using {plugin_name} plugin: '{plugin_desc}' v{version_split(plugin_version)}")
+                log.info(f"using {plugin_name.decode()} plugin: '{plugin_desc}' v{version_split(plugin_version)}")
 
     def detach_plugins(self) -> None:
         """Detaches all plugins from the core."""
@@ -270,7 +267,7 @@ class Core:
             if rval != ErrorType.SUCCESS:
                 log.debug("detach_plugins()")
                 log.warning(self.error_message(rval))
-                log.warning(f"core failed to detach {plugin_name} plugin.")
+                log.warning(f"core failed to detach {plugin_name.decode()} plugin.")
 
     def rom_open(self, romfile: bytes) -> int:
         """Opens the specified ROM file and initializes the core."""
