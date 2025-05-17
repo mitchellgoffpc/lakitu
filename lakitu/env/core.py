@@ -139,10 +139,13 @@ class Core:
 
     def handle_log_message(self, context: bytes, level: int, message: bytes) -> None:
         """Callback to handle log messages from the core."""
-        if any(context.decode() == ctx and message.decode().startswith(msg) for ctx, msg in SKIP_MESSAGES):
-            return
-        if self.log_level >= level:
-            sys.stderr.write(f"{context.decode()}: {message.decode()}\n")
+        try:
+            if any(context.decode() == ctx and message.decode().startswith(msg) for ctx, msg in SKIP_MESSAGES):
+                return
+            if self.log_level >= level:
+                sys.stderr.write(f"{context.decode()}: {message.decode()}\n")
+        except UnicodeDecodeError:
+            sys.stderr.write(f"{context!r}: {message!r}\n")
 
     def handle_state_update(self, context: bytes, param: int, value: int) -> None:
         """Callback to handle state updates from the core."""
@@ -175,8 +178,7 @@ class Core:
             api_ptr = C.pointer(C.c_int())
             name_ptr = C.pointer(C.c_char_p())
             cap_ptr = C.pointer(C.c_int())
-            rval = handle.PluginGetVersion(
-                type_ptr, ver_ptr, api_ptr, name_ptr, cap_ptr)
+            rval = handle.PluginGetVersion(type_ptr, ver_ptr, api_ptr, name_ptr, cap_ptr)
         except AttributeError:
             unload_library(handle)
             log.warning(f"library '{os.path.basename(path)}' is invalid, no PluginGetVersion() function found.")
