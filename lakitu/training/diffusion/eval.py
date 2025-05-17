@@ -208,7 +208,8 @@ def eval_main(config: EvalPolicyConfig) -> None:
     torch.backends.cuda.matmul.allow_tf32 = True
     set_seed(config.eval.seed)
 
-    policy = DiffusionPolicy.from_pretrained(config.policy_path, num_inference_steps=config.num_inference_steps)
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    policy = DiffusionPolicy.from_pretrained(config.policy_path, num_inference_steps=config.num_inference_steps, device=device)
     info = eval_policy(config.eval, policy)
     print(info["aggregated"])
 

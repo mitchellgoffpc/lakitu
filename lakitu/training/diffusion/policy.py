@@ -32,10 +32,16 @@ class FeatureType(str, Enum):
     VISUAL = "VISUAL"
     ACTION = "ACTION"
 
+class DType(str, Enum):
+    BOOL = "bool"
+    INT = "int"
+    FLOAT = "float"
+
 @dataclass
 class PolicyFeature:
     type: FeatureType
     shape: tuple[int, ...]
+    dtype: DType
     norm_mode: NormalizationMode
     stats: dict[str, list[float]] = field(default_factory=dict)
 
@@ -50,15 +56,15 @@ class DiffusionConfig(BaseConfig):
 
     input_features: dict[str, PolicyFeature] = field(default_factory=lambda: {
         "observation.image": PolicyFeature(
-            type=FeatureType.VISUAL, shape=(3, 240, 320), norm_mode=NormalizationMode.MEAN_STD, stats=IMAGENET_STATS
+            type=FeatureType.VISUAL, shape=(3, 240, 320), dtype=DType.FLOAT, norm_mode=NormalizationMode.MEAN_STD, stats=IMAGENET_STATS
         ),
     })
     output_features: dict[str, PolicyFeature] = field(default_factory=lambda: {
         "action.buttons": PolicyFeature(
-            type=FeatureType.ACTION, shape=(14,), norm_mode=NormalizationMode.MIN_MAX, stats={"min": [0.0], "max": [1.0]}
+            type=FeatureType.ACTION, shape=(14,), dtype=DType.BOOL, norm_mode=NormalizationMode.MIN_MAX, stats={"min": [0.], "max": [1.]}
         ),
         "action.joystick": PolicyFeature(
-            type=FeatureType.ACTION, shape=(2,), norm_mode=NormalizationMode.MIN_MAX, stats={"min": [-1.0], "max": [1.0]}
+            type=FeatureType.ACTION, shape=(2,), dtype=DType.FLOAT, norm_mode=NormalizationMode.MIN_MAX, stats={"min": [-1.], "max": [1.]}
         ),
     })
 
@@ -544,6 +550,9 @@ class Unnormalize(nn.Module):
             elif ft.norm_mode is NormalizationMode.MIN_MAX:
                 batch[key] = (batch[key] + 1) / 2
                 batch[key] = batch[key] * (buffer["max"] - buffer["min"]) + buffer["min"]
+            if ft.dtype in (DType.BOOL, DType.INT):
+                dtype_to_torch = {DType.BOOL: torch.bool, DType.INT: torch.long}
+                batch[key] = batch[key].round().to(dtype_to_torch[ft.dtype])
 
         return batch
 
