@@ -4,6 +4,7 @@ import multiprocessing
 import shutil
 import threading
 from pathlib import Path
+from typing import Any, Callable, Optional
 
 import av
 import cv2
@@ -14,7 +15,7 @@ import numpy as np
 from lakitu.env.core import Core
 from lakitu.env.defs import PluginType, ErrorType, M64pButtons
 from lakitu.env.gym import m64_get_level
-from lakitu.env.hooks import VideoExtension, InputExtension
+from lakitu.env.hooks import Queue, VideoExtension, InputExtension
 from lakitu.datasets.format import Field, Writer
 
 KEYBOARD_AXES = {
@@ -56,32 +57,36 @@ CONTROLLER_BUTTONS = {
     'L_TRIG': lambda report: (report[5] >> 6) & 1,
 }
 
-def parse_stick_data(report, left=True):
+def parse_stick_data(report: list[int], left: bool = True) -> tuple[float, float]:
     data = report[6 if left else 9:]
-    x_axis = (data[0] | ((data[1] & 0xF) << 8))
-    y_axis = ((data[1] >> 4) | (data[2] << 4))
-    x_axis = (x_axis - 1900) / 1500 if abs(x_axis - 1900) > 300 else 0  # scale and deadzone
-    y_axis = (y_axis - 1900) / 1500 if abs(y_axis - 1900) > 300 else 0
+    x_axis_raw = (data[0] | ((data[1] & 0xF) << 8))
+    y_axis_raw = ((data[1] >> 4) | (data[2] << 4))
+    x_axis = (x_axis_raw - 1900) / 1500 if abs(x_axis_raw - 1900) > 300 else 0  # scale and deadzone
+    y_axis = (y_axis_raw - 1900) / 1500 if abs(y_axis_raw - 1900) > 300 else 0
     return x_axis, y_axis
 
 
-# Input extension for keyboard and gamepad
-
 class KeyboardInputExtension(InputExtension):
-    def __init__(self, core, data_queue=None, savestate_path=None, info_hooks=None):
+    def __init__(
+        self,
+        core: Core,
+        data_queue: Optional[Queue] = None,
+        savestate_path: Optional[str] = None,
+        info_hooks: Optional[dict[str, Callable]] = None
+    ) -> None:
         super().__init__(core, data_queue, savestate_path, info_hooks)
-        self.pressed_keys = set()
-        self.gamepad_report = [0] * 64
+        self.pressed_keys: set[int] = set()
+        self.gamepad_report: list[int] = [0] * 64
         self.gamepad_report[6:9] = [0b01101100, 0b11000111, 0b01110110]
         self.gamepad_report[9:12] = [0b01101100, 0b11000111, 0b01110110]
         self.gamepad_thread = threading.Thread(target=self.read_gamepad_data, args=(), daemon=True)
         self.gamepad_thread.start()
 
-    def init(self, window):
+    def init(self, window: Any) -> None:
         super().init(window)
         glfw.set_key_callback(self.window, self.key_callback)
 
-    def read_gamepad_data(self):
+    def read_gamepad_data(self) -> None:
         gamepad_device = next((device for device in hid.enumerate() if device['product_string'] == "Pro Controller"), None)
         if gamepad_device is None:
             return
@@ -91,7 +96,7 @@ class KeyboardInputExtension(InputExtension):
             if (report := gamepad.read(64)):
                 self.gamepad_report = report
 
-    def key_callback(self, window, key, scancode, action, mods):
+    def key_callback(self, window: Any, key: int, scancode: int, action: int, mods: int) -> None:
         if action == glfw.RELEASE:
             self.pressed_keys.discard(key)
         elif action == glfw.PRESS:
@@ -99,7 +104,7 @@ class KeyboardInputExtension(InputExtension):
             if key == glfw.KEY_ESCAPE:
                 self.core.stop()
             elif key == glfw.KEY_L:
-                self.core.toggle_speed_limit(),
+                self.core.toggle_speed_limit()
             elif key == glfw.KEY_M:
                 self.core.toggle_mute()
             elif key == glfw.KEY_GRAVE_ACCENT:
@@ -109,7 +114,7 @@ class KeyboardInputExtension(InputExtension):
                 savestate_path = next(path for path in savestate_paths if not path.exists())
                 self.core.state_save(str(savestate_path))
 
-    def get_controller_states(self):
+    def get_controller_states(self) -> list[M64pButtons]:
         controller_state = M64pButtons()
         for button in KEYBOARD_BUTTONS:
             pressed = KEYBOARD_BUTTONS[button] in self.pressed_keys or CONTROLLER_BUTTONS[button](self.gamepad_report)
@@ -125,9 +130,7 @@ class KeyboardInputExtension(InputExtension):
         return [controller_state] + [M64pButtons()] * 3
 
 
-# Encoder thread
-
-def encode(data_queue, savestate_path):
+def encode(data_queue: Queue, savestate_path: Optional[str]) -> None:
     current_time = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     result_path = Path(__file__).parent.parent / 'data' / 'episodes' / current_time
     result_path.mkdir(parents=True, exist_ok=True)

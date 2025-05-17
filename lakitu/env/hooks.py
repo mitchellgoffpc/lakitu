@@ -3,14 +3,21 @@ import glfw
 import ctypes as C
 import numpy as np
 import logging as log
+from typing import Any, Callable, Optional, TYPE_CHECKING
 
 from lakitu.env.defs import ErrorType, PluginType, RenderMode, ControllerPluginType, GLAttribute, GLProfile
-from lakitu.env.defs import VidExtFuncs, InputExtFuncs, M64pButtons, M64pVideoExtension, M64pInputExtension
+from lakitu.env.defs import VidExtFuncs, InputExtFuncs, M64pButtons, M64pControlInfo, M64pVideoExtension, M64pInputExtension
+
+if TYPE_CHECKING:
+    import queue
+    import multiprocessing
+    from lakitu.env.core import Core
+    Queue = queue.Queue | multiprocessing.Queue
 
 class VideoExtension:
     """Mupen64Plus video extension that allows us to render to a glfw window."""
 
-    def __init__(self, input_extension, offscreen=False):
+    def __init__(self, input_extension: 'InputExtension', offscreen: bool = False) -> None:
         self.window = None
         self.input_extension = input_extension
         self.offscreen = offscreen
@@ -51,7 +58,7 @@ class VideoExtension:
         self.extension.VidExtFuncVKGetSurface = VidExtFuncs.VKGetSurface(self.vk_get_surface)
         self.extension.VidExtFuncVKGetInstanceExtensions = VidExtFuncs.VKGetInstanceExtensions(self.vk_get_instance_extensions)
 
-    def init(self):
+    def init(self) -> int:
         if self.render_mode == RenderMode.OPENGL:
             if not glfw.init():
                 log.error("Failed to initialize GLFW")
@@ -104,11 +111,12 @@ class VideoExtension:
 
         return ErrorType.SUCCESS
 
-    def init_with_render_mode(self, mode):
+    def init_with_render_mode(self, mode: int) -> int:
+        """Initialize the video extension with a specific render mode."""
         self.render_mode = mode
         return self.init()
 
-    def quit(self):
+    def quit(self) -> int:
         """Destroy the GLFW window."""
         if self.render_mode == RenderMode.OPENGL:
             if self.window:
@@ -118,17 +126,17 @@ class VideoExtension:
 
         return ErrorType.SUCCESS
 
-    def list_modes(self, size_array, num_sizes):
+    def list_modes(self, size_array: Any, num_sizes: C._Pointer[C.c_int]) -> int:
         """Enumerate the available resolutions for fullscreen video modes."""
         num_sizes.contents.value = 0
         return ErrorType.SUCCESS
 
-    def list_rates(self, size_array, num_rates, rates):
+    def list_rates(self, size_array: Any, num_rates: C._Pointer[C.c_int], rates: Any) -> int:
         """Enumerate the available rates for fullscreen video modes."""
         num_rates.contents.value = 0
         return ErrorType.SUCCESS
 
-    def set_mode(self, width, height, bits, mode, flags):
+    def set_mode(self, width: int, height: int, bits: int, mode: int, flags: int) -> int:
         """Set the video mode for the emulator rendering window. """
         if self.render_mode == RenderMode.OPENGL:
             glfw.set_window_size(self.window, width, height)
@@ -138,21 +146,21 @@ class VideoExtension:
 
         return ErrorType.SUCCESS
 
-    def set_mode_with_rate(self, width, height, rate, bits, mode, flags):
+    def set_mode_with_rate(self, width: int, height: int, rate: int, bits: int, mode: int, flags: int) -> int:
         return self.set_mode(width, height, bits, mode, flags)
 
-    def set_caption(self, title):
+    def set_caption(self, title: bytes) -> int:
         """Set the caption text of the emulator rendering window. """
         title_str = f"M64Py :: {title.decode()}"
         if self.window:
             glfw.set_window_title(self.window, title_str)
         return ErrorType.SUCCESS
 
-    def toggle_fs(self):
+    def toggle_fs(self) -> int:
         """Toggle between fullscreen and windowed rendering modes. """
         return ErrorType.SUCCESS
 
-    def gl_get_proc(self, proc):
+    def gl_get_proc(self, proc: bytes) -> int:
         """Get a pointer to an OpenGL extension function."""
         if self.render_mode != RenderMode.OPENGL:
             return 0
@@ -167,7 +175,7 @@ class VideoExtension:
             log.warning(f"VidExtFuncGLGetProc: '{proc_str}'")
             return 0
 
-    def gl_set_attr(self, attr, value):
+    def gl_set_attr(self, attr: int, value: int) -> int:
         """Set OpenGL attributes."""
         if self.render_mode != RenderMode.OPENGL:
             return ErrorType.INVALID_STATE
@@ -206,7 +214,7 @@ class VideoExtension:
 
         return ErrorType.SUCCESS
 
-    def gl_get_attr(self, attr, value):
+    def gl_get_attr(self, attr: int, value: C._Pointer[C.c_int]) -> int:
         """Get OpenGL attributes."""
         if self.render_mode != RenderMode.OPENGL:
             return ErrorType.INVALID_STATE
@@ -243,7 +251,7 @@ class VideoExtension:
             return ErrorType.SYSTEM_FAIL
         return ErrorType.SUCCESS
 
-    def gl_swap_buf(self):
+    def gl_swap_buf(self) -> int:
         """Swap the front/back buffers after rendering an output video frame."""
         if self.render_mode != RenderMode.OPENGL:
             return ErrorType.INVALID_STATE
@@ -254,25 +262,25 @@ class VideoExtension:
 
         return ErrorType.SUCCESS
 
-    def resize_window(self, width, height):
+    def resize_window(self, width: int, height: int) -> int:
         """Called when the video plugin has resized its OpenGL output viewport in response to a ResizeVideoOutput() call"""
         if self.window:
             glfw.set_window_size(self.window, width, height)
         return ErrorType.SUCCESS
 
-    def gl_get_default_framebuffer(self):
+    def gl_get_default_framebuffer(self) -> int:
         """Get the default framebuffer for OpenGL rendering."""
         if self.render_mode != RenderMode.OPENGL:
             return 0
         return 0  # GLFW uses the default framebuffer (0)
 
-    def vk_get_surface(self, a, b):
+    def vk_get_surface(self, a: Any, b: Any) -> int:
         """Get the Vulkan surface for rendering."""
         if self.render_mode != RenderMode.VULKAN:
             return ErrorType.INVALID_STATE
         return ErrorType.SUCCESS
 
-    def vk_get_instance_extensions(self, a, b):
+    def vk_get_instance_extensions(self, a: Any, b: Any) -> int:
         """Get the Vulkan instance extensions for rendering."""
         if self.render_mode != RenderMode.VULKAN:
             return ErrorType.INVALID_STATE
@@ -282,13 +290,18 @@ class VideoExtension:
 class InputExtension:
     """Mupen64Plus input extension that allows us to control the observation/action loop."""
 
-    def __init__(self, core, data_queue=None, savestate_path=None, info_hooks=None):
+    def __init__(self,
+        core: 'Core',
+        data_queue: Optional['Queue'] = None,
+        savestate_path: Optional[str] = None,
+        info_hooks: Optional[dict[str, Callable]] = None
+    ) -> None:
         self.window = None
         self.core = core
         self.data_queue = data_queue
         self.savestate_path = savestate_path
-        self.info_hooks = info_hooks
-        self.controller_states = None
+        self.info_hooks = info_hooks or {}
+        self.controller_states: Optional[list[M64pButtons]] = None
 
         # Input extension struct
         self.extension = M64pInputExtension()
@@ -296,11 +309,11 @@ class InputExtension:
         self.extension.InputExtFuncInitiateControllers = InputExtFuncs.InitiateControllers(self.initiate_controllers)
         self.extension.InputExtFuncRenderCallback = InputExtFuncs.RenderCallback(self.render_callback)
 
-    def init(self, window):
+    def init(self, window: Any) -> None:
         self.window = window
         self.gfx, *_ = self.core.plugin_map[PluginType.GFX]
 
-    def initiate_controllers(self, control_info):
+    def initiate_controllers(self, control_info: M64pControlInfo) -> None:
         """Callback to set up the controller information for the input plugin."""
         control_info.Controls[0].Present = 1
         control_info.Controls[0].Plugin = ControllerPluginType.MEMPAK
@@ -311,22 +324,22 @@ class InputExtension:
         control_info.Controls[3].Present = 0
         control_info.Controls[3].Plugin = ControllerPluginType.NONE
 
-    def get_keys(self, controller, buttons):
+    def get_keys(self, controller: int, buttons: C._Pointer[M64pButtons]) -> None:
         """Callback to get the current state of the controller buttons for a single controller."""
         if not self.controller_states:
             self.controller_states = self.get_controller_states()
         for field, *_ in M64pButtons._fields_:
             setattr(buttons.contents, field, getattr(self.controller_states[controller], field))
 
-    def get_controller_states(self):
+    def get_controller_states(self) -> list[M64pButtons]:
         """Get the current state of the controller buttons for all controllers, by using GLFW key callbacks, polling gamepad state, etc."""
         raise NotImplementedError("get_controller_states() must be implemented in a subclass")
 
-    def get_info(self):
+    def get_info(self) -> dict[str, Any]:
         """Get the current state of the controller buttons."""
-        return {name: hook(self.core) for name, hook in (self.info_hooks or {}).items()}
+        return {name: hook(self.core) for name, hook in self.info_hooks.items()}
 
-    def render_callback(self):
+    def render_callback(self) -> None:
         """Callback that gets called every time a frame is rendered. This is where we read the framebuffer, process GLFW events, etc."""
         if not self.window:
             return
