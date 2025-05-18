@@ -1,6 +1,6 @@
 import argparse
 import datetime
-import multiprocessing
+import multiprocessing as mp
 import shutil
 import threading
 from pathlib import Path
@@ -15,7 +15,7 @@ import numpy as np
 from lakitu.env.core import Core
 from lakitu.env.defs import PluginType, ErrorType, M64pButtons
 from lakitu.env.gym import m64_get_level
-from lakitu.env.hooks import Queue, VideoExtension, InputExtension
+from lakitu.env.hooks import VideoExtension, InputExtension
 from lakitu.datasets.format import Field, Writer
 
 KEYBOARD_AXES = {
@@ -63,28 +63,34 @@ def parse_stick_data(report: list[int], left: bool = True) -> tuple[float, float
     y_axis_raw = ((data[1] >> 4) | (data[2] << 4))
     x_axis = (x_axis_raw - 1900) / 1500 if abs(x_axis_raw - 1900) > 300 else 0  # scale and deadzone
     y_axis = (y_axis_raw - 1900) / 1500 if abs(y_axis_raw - 1900) > 300 else 0
+    x_axis = max(-1, min(1, x_axis))  # clamp to [-1, 1]
+    y_axis = max(-1, min(1, y_axis))
     return x_axis, y_axis
 
+def axis_to_float(value: int) -> float:
+    return value / 127.0  # scale to [-1, 1] range
 
-class KeyboardInputExtension(InputExtension):
-    def __init__(
-        self,
-        core: Core,
-        data_queue: Optional[Queue] = None,
-        savestate_path: Optional[str] = None,
-        info_hooks: Optional[dict[str, Callable]] = None
-    ) -> None:
-        super().__init__(core, data_queue, savestate_path, info_hooks)
-        self.pressed_keys: set[int] = set()
-        self.gamepad_report: list[int] = [0] * 64
-        self.gamepad_report[6:9] = [0b01101100, 0b11000111, 0b01110110]
-        self.gamepad_report[9:12] = [0b01101100, 0b11000111, 0b01110110]
-        self.gamepad_thread = threading.Thread(target=self.read_gamepad_data, args=(), daemon=True)
-        self.gamepad_thread.start()
+def float_to_axis(value: float) -> int:
+    value = max(-1, min(1, value))  # clamp to [-1, 1]
+    return int(value * 127)  # scale to [-127, 127] range
 
-    def init(self, window: Any) -> None:
-        super().init(window)
-        glfw.set_key_callback(self.window, self.key_callback)
+def combine_controller_states(*states: M64pButtons) -> M64pButtons:
+    combined_state = M64pButtons()
+    for button in M64pButtons.get_button_fields():
+        setattr(combined_state, button, int(any(getattr(state, button) for state in states)))
+    for axis in M64pButtons.get_joystick_fields():
+        setattr(combined_state, axis, float_to_axis(sum(axis_to_float(getattr(state, axis)) for state in states)))
+    return combined_state
+
+
+class GamepadController:
+    def __init__(self) -> None:
+        self.active = False
+        self.report: list[int] = [0] * 64
+        self.report[6:9] = [0b01101100, 0b11000111, 0b01110110]
+        self.report[9:12] = [0b01101100, 0b11000111, 0b01110110]
+        self.reader = threading.Thread(target=self.read_gamepad_data, args=(), daemon=True)
+        self.reader.start()
 
     def read_gamepad_data(self) -> None:
         gamepad_device = next((device for device in hid.enumerate() if device['product_string'] == "Pro Controller"), None)
@@ -94,7 +100,34 @@ class KeyboardInputExtension(InputExtension):
         gamepad.nonblocking = True
         while True:
             if (report := gamepad.read(64)):
-                self.gamepad_report = report
+                self.active = True
+                self.report = report
+
+    def get_controller_state(self) -> M64pButtons:
+        controller_state = M64pButtons()
+        for button in KEYBOARD_BUTTONS:
+            setattr(controller_state, button, int(CONTROLLER_BUTTONS[button](self.report)))
+        x_axis, y_axis = parse_stick_data(self.report, left=True)
+        controller_state.X_AXIS = float_to_axis(x_axis)
+        controller_state.Y_AXIS = float_to_axis(y_axis)
+        return controller_state
+
+
+class KeyboardInputExtension(InputExtension):
+    def __init__(
+        self,
+        core: Core,
+        data_queue: Optional[mp.Queue] = None,
+        savestate_path: Optional[str] = None,
+        info_hooks: Optional[dict[str, Callable]] = None
+    ) -> None:
+        super().__init__(core, data_queue, savestate_path, info_hooks)
+        self.pressed_keys: set[int] = set()
+        self.gamepad = GamepadController()
+
+    def init(self, window: Any) -> None:
+        super().init(window)
+        glfw.set_key_callback(self.window, self.key_callback)
 
     def key_callback(self, window: Any, key: int, scancode: int, action: int, mods: int) -> None:
         if action == glfw.RELEASE:
@@ -115,22 +148,20 @@ class KeyboardInputExtension(InputExtension):
                 self.core.state_save(str(savestate_path))
 
     def get_controller_states(self) -> list[M64pButtons]:
-        controller_state = M64pButtons()
+        gamepad_state = self.gamepad.get_controller_state()
+        keyboard_state = M64pButtons()
         for button in KEYBOARD_BUTTONS:
-            pressed = KEYBOARD_BUTTONS[button] in self.pressed_keys or CONTROLLER_BUTTONS[button](self.gamepad_report)
-            setattr(controller_state, button, int(pressed))
-        ctl_x_axis, ctl_y_axis = parse_stick_data(self.gamepad_report, left=True)
-        kb_x_axis = sum(value for key, value in KEYBOARD_AXES['X_AXIS'].items() if key in self.pressed_keys)
-        kb_y_axis = sum(value for key, value in KEYBOARD_AXES['Y_AXIS'].items() if key in self.pressed_keys)
-        magnitude = np.sqrt(kb_x_axis**2 + kb_y_axis**2) + 1e-6
-        x_axis = max(-1, min(1, kb_x_axis / magnitude + ctl_x_axis))
-        y_axis = max(-1, min(1, kb_y_axis / magnitude + ctl_y_axis))
-        controller_state.X_AXIS = int(x_axis * 127)
-        controller_state.Y_AXIS = int(y_axis * 127)
+            setattr(keyboard_state, button, int(KEYBOARD_BUTTONS[button] in self.pressed_keys))
+        x_axis = sum(value for key, value in KEYBOARD_AXES['X_AXIS'].items() if key in self.pressed_keys)
+        y_axis = sum(value for key, value in KEYBOARD_AXES['Y_AXIS'].items() if key in self.pressed_keys)
+        magnitude = np.sqrt(x_axis**2 + y_axis**2) + 1e-6
+        keyboard_state.X_AXIS = float_to_axis(x_axis / magnitude)
+        keyboard_state.Y_AXIS = float_to_axis(y_axis / magnitude)
+        controller_state = combine_controller_states(keyboard_state, gamepad_state)
         return [controller_state] + [M64pButtons()] * 3
 
 
-def encode(data_queue: Queue, savestate_path: Optional[str]) -> None:
+def encode(data_queue: mp.Queue, savestate_path: Optional[str], info_fields: list[Field]) -> None:
     current_time = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     result_path = Path(__file__).parent.parent / 'data' / 'episodes' / current_time
     result_path.mkdir(parents=True, exist_ok=True)
@@ -151,8 +182,7 @@ def encode(data_queue: Queue, savestate_path: Optional[str]) -> None:
         ('frame_index', np.dtype(np.uint32), ()),
         ('action.joystick', np.dtype(np.float32), (2,)),
         ('action.buttons', np.dtype(np.uint8), (14,)),
-        ('info.level', np.dtype(np.uint8), ()),
-    ]
+    ] + [(f'info.{name}', dtype, shape) for name, dtype, shape in info_fields]
 
     frame_count = 0
     with open(data_path, 'wb') as f:
@@ -167,11 +197,12 @@ def encode(data_queue: Queue, savestate_path: Optional[str]) -> None:
 
             joystick = [float(getattr(controller_states[0], field)) / 127 for field in M64pButtons.get_joystick_fields()]
             buttons = [int(getattr(controller_states[0], field)) for field in M64pButtons.get_button_fields()]
+            info = {f'info.{name}': np.array(info[name], dtype=dtype).reshape(shape) for name, dtype, shape in info_fields}
             writer.writerow({
                 'frame_index': np.array(frame_count, dtype=np.uint32),
                 'action.joystick': np.array(joystick, dtype=np.float32),
                 'action.buttons': np.array(buttons, dtype=np.uint8),
-                'info.level': np.array(info['level'], dtype=np.uint8)
+                **info,
             })
 
             frame_count += 1
@@ -197,10 +228,11 @@ if __name__ == '__main__':
 
     # Create the encoder thread
     data_queue = None
-    ctx = multiprocessing.get_context('spawn')
+    ctx = mp.get_context('spawn')
     if args.record:
         data_queue = ctx.Queue()
-        encoder_thread = ctx.Process(target=encode, args=(data_queue, args.savestate))
+        info_fields = [('level', np.dtype(np.uint8), ())]
+        encoder_thread = ctx.Process(target=encode, args=(data_queue, args.savestate, info_fields))
         encoder_thread.start()
 
     # Load the core and plugins
