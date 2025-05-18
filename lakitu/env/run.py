@@ -197,7 +197,8 @@ def encode(data_queue: mp.Queue, savestate_path: Optional[str], info_fields: lis
         ('frame_index', np.dtype(np.uint32), ()),
         ('action.joystick', np.dtype(np.float32), (2,)),
         ('action.buttons', np.dtype(np.uint8), (14,)),
-    ] + [(f'info.{name}', dtype, shape) for name, dtype, shape in info_fields]
+        *[(f'info.{name}', dtype, shape) for name, dtype, shape in info_fields],
+    ]
 
     frame_count = 0
     with open(data_path, 'wb') as f:

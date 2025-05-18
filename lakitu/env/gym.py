@@ -296,6 +296,8 @@ if __name__ == "__main__":
         controller_state = combine_controller_states(gamepad_state, keyboard_state)
         if any(getattr(controller_state, k) for k, *_ in M64pButtons._fields_):
             control_mode = ControlMode.HUMAN
+        if control_mode is ControlMode.REPLAY and frame_idx >= len(episode_data['action.joystick']):
+            control_mode = ControlMode.HUMAN
 
         # Get action based on control mode
         if control_mode is ControlMode.MODEL:
@@ -306,6 +308,7 @@ if __name__ == "__main__":
             action = {k.removeprefix("action."): v.cpu().numpy()[0] for k, v in action_tensor.items()}
         elif control_mode is ControlMode.REPLAY:
             action = {k: episode_data[f'action.{k}'][frame_idx] for k in env.action_space.keys()}
+            action['buttons'] = action['buttons'].astype(bool)  # TODO: remove this after recording the next dataset
         elif control_mode == ControlMode.HUMAN:
             action = {
                 'joystick': np.array([getattr(controller_state, k) / 127 for k in M64pButtons.get_joystick_fields()], dtype=np.float32),
