@@ -176,9 +176,9 @@ class KeyboardInputExtension(InputExtension):
         return [controller_state] + [M64pButtons()] * 3
 
 
-def encode(data_queue: mp.Queue, savestate_path: Optional[str], info_fields: list[Field]) -> None:
+def encode(data_queue: mp.Queue, output_path: str, savestate_path: Optional[str], info_fields: list[Field]) -> None:
     current_time = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    result_path = Path(__file__).parent.parent / 'data' / 'episodes' / current_time
+    result_path = Path(output_path) / current_time
     result_path.mkdir(parents=True, exist_ok=True)
 
     if savestate_path:
@@ -234,7 +234,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Run Lakitu environment')
     parser.add_argument('path', type=str, help='ROM Path')
     parser.add_argument('-s', '--savestate', type=str, default=None, help='Path to save state file')
-    parser.add_argument('-r', '--record', action='store_true', default=False, help='Record the episode')
+    parser.add_argument('-o', '--output', type=str, default=None, help='Path to output directory')
     args = parser.parse_args()
 
     if not Path(args.path).is_file():
@@ -245,10 +245,10 @@ if __name__ == '__main__':
     # Create the encoder thread
     data_queue = None
     ctx = mp.get_context('spawn')
-    if args.record:
+    if args.output:
         data_queue = ctx.Queue()
         info_fields = [('level', np.dtype(np.uint8), ())]
-        encoder_thread = ctx.Process(target=encode, args=(data_queue, args.savestate, info_fields))
+        encoder_thread = ctx.Process(target=encode, args=(data_queue, args.output, args.savestate, info_fields))
         encoder_thread.start()
 
     # Load the core and plugins
