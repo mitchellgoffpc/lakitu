@@ -522,7 +522,10 @@ class Normalize(nn.Module):
     def forward(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
         batch = batch.copy()
         for key, ft in self.features.items():
-            assert key in batch
+            assert key in batch, f"Key {key} not found in batch"
+            input_shape, expected_shape = tuple(batch[key].shape[-len(ft.shape):]), tuple(ft.shape)
+            assert input_shape == expected_shape, f"Shape mismatch for key {key}: {input_shape} != {expected_shape}"
+
             buffer = self.stats_buffers[key.replace(".", "_")]
             if ft.norm_mode is NormalizationMode.MEAN_STD:
                 batch[key] = (batch[key] - buffer["mean"]) / (buffer["std"] + 1e-8)
@@ -543,7 +546,10 @@ class Unnormalize(nn.Module):
     def forward(self, batch: dict[str, Tensor]) -> dict[str, Tensor]:
         batch = batch.copy()
         for key, ft in self.features.items():
-            assert key in batch
+            assert key in batch, f"Key {key} not found in batch"
+            input_shape, expected_shape = tuple(batch[key].shape[-len(ft.shape):]), tuple(ft.shape)
+            assert input_shape == expected_shape, f"Shape mismatch for key {key}: {input_shape} != {expected_shape}"
+
             buffer = self.stats_buffers[key.replace(".", "_")]
             if ft.norm_mode is NormalizationMode.MEAN_STD:
                 batch[key] = batch[key] * buffer["std"] + buffer["mean"]
