@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import av
+import cv2
 import math
 import random
 import time
@@ -106,6 +107,7 @@ def rollout(env: gym.vector.AsyncVectorEnv, policy: DiffusionPolicy, output_dir:
     max_steps = env.call("_max_episode_steps")[0]
     progbar = trange(max_steps, desc="Running rollouts", leave=False)
     while not np.all(done):
+        observation = np.stack([cv2.resize(obs, (320, 240)) for obs in observation], axis=0)
         observation_tensor = torch.as_tensor(observation).to(device)
         observation_tensor = einops.rearrange(observation_tensor, "b h w c -> b c h w").contiguous().float() / 255.0
         action_tensor = policy.select_action({'observation.image': observation_tensor})
@@ -113,7 +115,7 @@ def rollout(env: gym.vector.AsyncVectorEnv, policy: DiffusionPolicy, output_dir:
 
         if output_dir:
             for frame, container, stream in zip(observation, containers, streams, strict=True):
-                packet = stream.encode(av.VideoFrame.from_ndarray(frame.astype(np.uint8), format='rgb24'))
+                packet = stream.encode(av.VideoFrame.from_ndarray(frame, format='rgb24'))
                 container.mux(packet)
 
         observation, reward, terminated, truncated, info = env.step(action)

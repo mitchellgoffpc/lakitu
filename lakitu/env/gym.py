@@ -234,7 +234,7 @@ if __name__ == "__main__":
     observation, info = env.reset()
 
     if args.policy:
-        policy = DiffusionPolicy.from_pretrained(Path(args.policy), device='cuda' if torch.cuda.is_available() else 'cpu')
+        policy = DiffusionPolicy.from_pretrained(Path(args.policy), device='cuda' if torch.cuda.is_available() else 'cpu').eval()
         policy.reset()
     elif args.replay:
         episode_data = load_data(Path(args.replay) / 'episode.data')

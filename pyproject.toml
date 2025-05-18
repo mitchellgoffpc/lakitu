@@ -13,6 +13,7 @@ authors = [
 ]
 dependencies = [
     "av",
+    "opencv-python",
     "einops",
     "glfw",
     "gymnasium",
@@ -22,6 +23,7 @@ dependencies = [
     "torch",
     "torchvision",
     "tqdm",
+    "wandb",
 ]
 
 [project.optional-dependencies]
@@ -29,9 +31,7 @@ dev = [
     "ruff",
     "mypy",
     "pytest",
-    "opencv-python",
     "pygame",
-    "wandb",
 ]
 
 [tool.ruff]
