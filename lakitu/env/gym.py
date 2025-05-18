@@ -1,10 +1,10 @@
-import struct
-import numpy as np
-import multiprocessing as mp
 import gymnasium as gym
+import multiprocessing as mp
+import numpy as np
+import struct
 from enum import IntEnum
 from pathlib import Path
-from typing import Any, Optional, Callable, Union
+from typing import Any, Optional, Callable
 
 from lakitu.env.core import Core
 from lakitu.env.hooks import VideoExtension, InputExtension
@@ -27,8 +27,8 @@ def m64_get_level(core: Core) -> int:
     return result
 
 def emulator_process(
-    rom_path: str,
-    savestate_path: str,
+    rom_path: Path,
+    savestate_path: Optional[Path],
     input_queue: mp.Queue,
     data_queue: mp.Queue,
     info_hooks: Optional[dict[str, Callable]]
@@ -61,7 +61,7 @@ class RemoteInputExtension(InputExtension):
         core: Core,
         input_queue: mp.Queue,
         data_queue: mp.Queue,
-        savestate_path: Optional[str] = None,
+        savestate_path: Optional[Path] = None,
         info_hooks: Optional[dict[str, Callable]] = None
     ) -> None:
         super().__init__(core, data_queue, savestate_path, info_hooks)
@@ -94,14 +94,14 @@ class N64Env(gym.Env):
     metadata = {"render_modes": ["rgb_array"], "render_fps": 30}
 
     def __init__(self,
-        rom_path: Union[str, Path],
-        savestate_path: Optional[Union[str, Path]] = None,
+        rom_path: Path,
+        savestate_path: Optional[Path] = None,
         render_mode: Optional[str] = None,
         info_hooks: Optional[dict[str, Callable]] = None
     ) -> None:
         super().__init__()
-        self.rom_path = str(rom_path)
-        self.savestate_path = Path(savestate_path) if savestate_path else None
+        self.rom_path = rom_path
+        self.savestate_path = savestate_path
         self.render_mode = render_mode
         self.info_hooks = info_hooks
         self.emulator_proc: Optional[mp.process.BaseProcess] = None
@@ -127,7 +127,7 @@ class N64Env(gym.Env):
 
         self.emulator_proc = self.ctx.Process(
             target=emulator_process,
-            args=(self.rom_path, str(self.savestate_path), self.input_queue, self.data_queue, self.info_hooks),
+            args=(self.rom_path, self.savestate_path, self.input_queue, self.data_queue, self.info_hooks),
             daemon=True
         )
         self.emulator_proc.start()
@@ -201,7 +201,7 @@ class N64Env(gym.Env):
         while not self.data_queue.empty():
             self.data_queue.get_nowait()
 
-    def savestate(self, path: Union[str, Path]) -> None:
+    def savestate(self, path: Path) -> None:
         """Save the current state of the emulator"""
         if self.emulator_proc and self.emulator_proc.is_alive():
             self.input_queue.put(("SAVE", path))
@@ -212,6 +212,7 @@ class N64Env(gym.Env):
 if __name__ == "__main__":
     import argparse
     import cv2
+    import datetime
     import einops
     import pygame
     import torch
@@ -252,6 +253,17 @@ if __name__ == "__main__":
     parser.add_argument('-o', '--output', type=str, default=None, help='Path to output directory')
     args = parser.parse_args()
 
+    savestate_path = None
+    if args.savestate:
+        savestate_path = Path(args.savestate)
+    elif args.replay:
+        savestate_path = Path(args.replay) / "initial_state.m64p"
+
+    if not Path(args.rom_path).is_file():
+        raise FileNotFoundError(f"ROM file {Path(args.rom_path)} does not exist")
+    if savestate_path and not savestate_path.is_file():
+        raise FileNotFoundError(f"Savestate file {savestate_path} does not exist")
+
     # Initialize Pygame
     W, H = 320, 240
     pygame.init()
@@ -267,11 +279,11 @@ if __name__ == "__main__":
     if args.output:
         data_queue = ctx.Queue()
         info_fields = [('level', np.dtype(np.uint8), ()), ('control_mode', np.dtype(np.uint8), ())]
-        encoder_process = ctx.Process(target=encode, args=(data_queue, args.output, args.savestate, info_fields))
+        output_path = Path(args.output) / datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        encoder_process = ctx.Process(target=encode, args=(data_queue, output_path, savestate_path, info_fields))
         encoder_process.start()
 
-    savestate_path = Path(args.replay) / "initial_state.m64p" if args.replay and not args.savestate else args.savestate
-    env = N64Env(args.rom_path, savestate_path, render_mode="rgb_array", info_hooks={'level': m64_get_level})
+    env = N64Env(Path(args.rom_path), savestate_path, render_mode="rgb_array", info_hooks={'level': m64_get_level})
     observation, info = env.reset()
 
     if args.policy:

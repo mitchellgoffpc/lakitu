@@ -140,7 +140,7 @@ class KeyboardInputExtension(InputExtension):
         self,
         core: Core,
         data_queue: Optional[mp.Queue] = None,
-        savestate_path: Optional[str] = None,
+        savestate_path: Optional[Path] = None,
         info_hooks: Optional[dict[str, Callable]] = None
     ) -> None:
         super().__init__(core, data_queue, savestate_path, info_hooks)
@@ -176,23 +176,20 @@ class KeyboardInputExtension(InputExtension):
         return [controller_state] + [M64pButtons()] * 3
 
 
-def encode(data_queue: mp.Queue, output_path: str, savestate_path: Optional[str], info_fields: list[Field]) -> None:
-    current_time = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    result_path = Path(output_path) / current_time
-    result_path.mkdir(parents=True, exist_ok=True)
-
+def encode(data_queue: mp.Queue, output_path: Path, savestate_path: Optional[str], info_fields: list[Field]) -> None:
+    output_path.mkdir(parents=True, exist_ok=True)
     if savestate_path:
-        shutil.copy(savestate_path, result_path / 'initial_state.m64p')
+        shutil.copy(savestate_path, output_path / 'initial_state.m64p')
 
     width, height, fps = 320, 240, 30
-    container = av.open(str(result_path / 'episode.mp4'), mode='w')
+    container = av.open(str(output_path / 'episode.mp4'), mode='w')
     stream = container.add_stream('h264', rate=fps)
     stream.width = width
     stream.height = height
     stream.pix_fmt = 'yuv420p'
     stream.codec_context.options = {'crf': '23', 'g': '10'}
 
-    data_path = result_path / 'episode.data'
+    data_path = output_path / 'episode.data'
     fields: list[Field] = [
         ('frame_index', np.dtype(np.uint32), ()),
         ('action.joystick', np.dtype(np.float32), (2,)),
@@ -232,15 +229,15 @@ def encode(data_queue: mp.Queue, output_path: str, savestate_path: Optional[str]
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Run Lakitu environment')
-    parser.add_argument('path', type=str, help='ROM Path')
+    parser.add_argument('rom_path', type=str, help='Path to the ROM file')
     parser.add_argument('-s', '--savestate', type=str, default=None, help='Path to save state file')
     parser.add_argument('-o', '--output', type=str, default=None, help='Path to output directory')
     args = parser.parse_args()
 
-    if not Path(args.path).is_file():
-        raise FileNotFoundError(f"ROM file {args.path!r} does not exist")
+    if not Path(args.rom_path).is_file():
+        raise FileNotFoundError(f"ROM file {Path(args.rom_path)} does not exist")
     if args.savestate and not Path(args.savestate).is_file():
-        raise FileNotFoundError(f"Savestate file {args.savestate!r} does not exist")
+        raise FileNotFoundError(f"Savestate file {Path(args.savestate)} does not exist")
 
     # Create the encoder thread
     data_queue = None
@@ -248,7 +245,9 @@ if __name__ == '__main__':
     if args.output:
         data_queue = ctx.Queue()
         info_fields = [('level', np.dtype(np.uint8), ())]
-        encoder_thread = ctx.Process(target=encode, args=(data_queue, args.output, args.savestate, info_fields))
+        output_path = Path(args.output) / datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        savestate_path = Path(args.savestate) if args.savestate else None
+        encoder_thread = ctx.Process(target=encode, args=(data_queue, output_path, savestate_path, info_fields))
         encoder_thread.start()
 
     # Load the core and plugins
@@ -259,7 +258,7 @@ if __name__ == '__main__':
     core.load_plugins()
 
     # Open the ROM file
-    with open(args.path, 'rb') as f:
+    with open(args.rom_path, 'rb') as f:
         romfile = f.read()
     rval = core.rom_open(romfile)
     if rval == ErrorType.SUCCESS:

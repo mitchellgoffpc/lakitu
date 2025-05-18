@@ -5,6 +5,7 @@ import glfw
 import ctypes as C
 import numpy as np
 import logging as log
+from pathlib import Path
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
 from lakitu.env.defs import ErrorType, PluginType, RenderMode, ControllerPluginType, GLAttribute, GLProfile
@@ -295,7 +296,7 @@ class InputExtension:
     def __init__(self,
         core: 'Core',
         data_queue: Optional['Queue'] = None,
-        savestate_path: Optional[str] = None,
+        savestate_path: Optional[Path] = None,
         info_hooks: Optional[dict[str, Callable]] = None
     ) -> None:
         self.window = None
@@ -348,7 +349,7 @@ class InputExtension:
         if glfw.window_should_close(self.window):
             self.core.stop()
         if self.savestate_path:
-            self.core.state_load(self.savestate_path)
+            self.core.state_load(str(self.savestate_path))
         elif self.data_queue and self.controller_states:  # Only push one frame per input event
             # NOTE: We can also use glReadPixels to read the framebuffer, but using the official API removes the dependency on PyOpenGL
             width, height = glfw.get_window_size(self.window)
