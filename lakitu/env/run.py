@@ -18,45 +18,6 @@ from lakitu.env.gym import m64_get_level
 from lakitu.env.hooks import VideoExtension, InputExtension
 from lakitu.datasets.format import Field, Writer
 
-KEYBOARD_AXES = {
-    'X_AXIS': {glfw.KEY_LEFT: -1, glfw.KEY_RIGHT: 1},
-    'Y_AXIS': {glfw.KEY_DOWN: -1, glfw.KEY_UP: 1},
-}
-
-KEYBOARD_BUTTONS = {
-    'R_DPAD': glfw.KEY_L,
-    'L_DPAD': glfw.KEY_J,
-    'U_DPAD': glfw.KEY_I,
-    'D_DPAD': glfw.KEY_K,
-    'START_BUTTON': glfw.KEY_ENTER,
-    'Z_TRIG': glfw.KEY_C,
-    'B_BUTTON': glfw.KEY_X,
-    'A_BUTTON': glfw.KEY_SPACE,
-    'R_CBUTTON': glfw.KEY_D,
-    'L_CBUTTON': glfw.KEY_A,
-    'D_CBUTTON': glfw.KEY_S,
-    'U_CBUTTON': glfw.KEY_W,
-    'R_TRIG': glfw.KEY_PERIOD,
-    'L_TRIG': glfw.KEY_COMMA,
-}
-
-CONTROLLER_BUTTONS = {
-    'R_DPAD': lambda report: (report[5] >> 2) & 1,
-    'L_DPAD': lambda report: (report[5] >> 3) & 1,
-    'U_DPAD': lambda report: (report[5] >> 1) & 1,
-    'D_DPAD': lambda report: (report[5] >> 0) & 1,
-    'START_BUTTON': lambda report: (report[4] >> 1) & 1,
-    'Z_TRIG': lambda report: ((report[5] >> 7) & 1) or ((report[3] >> 7) & 1),
-    'B_BUTTON': lambda report: ((report[3] >> 2) & 1) or ((report[3] >> 1) & 1),
-    'A_BUTTON': lambda report: ((report[3] >> 3) & 1) or ((report[3] >> 0) & 1),
-    'R_CBUTTON': lambda report: parse_stick_data(report, left=False)[0] > 0.5,
-    'L_CBUTTON': lambda report: parse_stick_data(report, left=False)[0] < -0.5,
-    'D_CBUTTON': lambda report: parse_stick_data(report, left=False)[1] > 0.5,
-    'U_CBUTTON': lambda report: parse_stick_data(report, left=False)[1] < -0.5,
-    'R_TRIG': lambda report: (report[3] >> 6) & 1,
-    'L_TRIG': lambda report: (report[5] >> 6) & 1,
-}
-
 def parse_stick_data(report: list[int], left: bool = True) -> tuple[float, float]:
     data = report[6 if left else 9:]
     x_axis_raw = (data[0] | ((data[1] & 0xF) << 8))
@@ -84,6 +45,23 @@ def combine_controller_states(*states: M64pButtons) -> M64pButtons:
 
 
 class GamepadController:
+    KEYMAP = {
+        'R_DPAD': lambda report: (report[5] >> 2) & 1,
+        'L_DPAD': lambda report: (report[5] >> 3) & 1,
+        'U_DPAD': lambda report: (report[5] >> 1) & 1,
+        'D_DPAD': lambda report: (report[5] >> 0) & 1,
+        'START_BUTTON': lambda report: (report[4] >> 1) & 1,
+        'Z_TRIG': lambda report: ((report[5] >> 7) & 1) or ((report[3] >> 7) & 1),
+        'B_BUTTON': lambda report: ((report[3] >> 2) & 1) or ((report[3] >> 1) & 1),
+        'A_BUTTON': lambda report: ((report[3] >> 3) & 1) or ((report[3] >> 0) & 1),
+        'R_CBUTTON': lambda report: parse_stick_data(report, left=False)[0] > 0.5,
+        'L_CBUTTON': lambda report: parse_stick_data(report, left=False)[0] < -0.5,
+        'D_CBUTTON': lambda report: parse_stick_data(report, left=False)[1] > 0.5,
+        'U_CBUTTON': lambda report: parse_stick_data(report, left=False)[1] < -0.5,
+        'R_TRIG': lambda report: (report[3] >> 6) & 1,
+        'L_TRIG': lambda report: (report[5] >> 6) & 1,
+    }
+
     def __init__(self) -> None:
         self.active = False
         self.report: list[int] = [0] * 64
@@ -105,11 +83,55 @@ class GamepadController:
 
     def get_controller_state(self) -> M64pButtons:
         controller_state = M64pButtons()
-        for button in KEYBOARD_BUTTONS:
-            setattr(controller_state, button, int(CONTROLLER_BUTTONS[button](self.report)))
+        for button in self.KEYMAP:
+            setattr(controller_state, button, int(self.KEYMAP[button](self.report)))
         x_axis, y_axis = parse_stick_data(self.report, left=True)
         controller_state.X_AXIS = float_to_axis(x_axis)
         controller_state.Y_AXIS = float_to_axis(y_axis)
+        return controller_state
+
+
+class KeyboardController:
+    JOYSTICK = {
+        'X_AXIS': {glfw.KEY_LEFT: -1, glfw.KEY_RIGHT: 1},
+        'Y_AXIS': {glfw.KEY_DOWN: -1, glfw.KEY_UP: 1},
+    }
+
+    KEYMAP = {
+        'R_DPAD': glfw.KEY_L,
+        'L_DPAD': glfw.KEY_J,
+        'U_DPAD': glfw.KEY_I,
+        'D_DPAD': glfw.KEY_K,
+        'START_BUTTON': glfw.KEY_ENTER,
+        'Z_TRIG': glfw.KEY_X,
+        'B_BUTTON': glfw.KEY_C,
+        'A_BUTTON': glfw.KEY_SPACE,
+        'R_CBUTTON': glfw.KEY_D,
+        'L_CBUTTON': glfw.KEY_A,
+        'D_CBUTTON': glfw.KEY_S,
+        'U_CBUTTON': glfw.KEY_W,
+        'R_TRIG': glfw.KEY_PERIOD,
+        'L_TRIG': glfw.KEY_COMMA,
+    }
+
+    def __init__(self) -> None:
+        self.pressed_keys: set[int] = set()
+
+    def keyup(self, key: int) -> None:
+        self.pressed_keys.discard(key)
+
+    def keydown(self, key: int) -> None:
+        self.pressed_keys.add(key)
+
+    def get_controller_state(self) -> M64pButtons:
+        controller_state = M64pButtons()
+        for button in self.KEYMAP:
+            setattr(controller_state, button, int(self.KEYMAP[button] in self.pressed_keys))
+        x_axis = sum(value for key, value in self.JOYSTICK['X_AXIS'].items() if key in self.pressed_keys)
+        y_axis = sum(value for key, value in self.JOYSTICK['Y_AXIS'].items() if key in self.pressed_keys)
+        magnitude = np.sqrt(x_axis**2 + y_axis**2) + 1e-6
+        controller_state.X_AXIS = float_to_axis(x_axis / magnitude)
+        controller_state.Y_AXIS = float_to_axis(y_axis / magnitude)
         return controller_state
 
 
@@ -122,7 +144,7 @@ class KeyboardInputExtension(InputExtension):
         info_hooks: Optional[dict[str, Callable]] = None
     ) -> None:
         super().__init__(core, data_queue, savestate_path, info_hooks)
-        self.pressed_keys: set[int] = set()
+        self.keyboard = KeyboardController()
         self.gamepad = GamepadController()
 
     def init(self, window: Any) -> None:
@@ -131,9 +153,9 @@ class KeyboardInputExtension(InputExtension):
 
     def key_callback(self, window: Any, key: int, scancode: int, action: int, mods: int) -> None:
         if action == glfw.RELEASE:
-            self.pressed_keys.discard(key)
+            self.keyboard.keyup(key)
         elif action == glfw.PRESS:
-            self.pressed_keys.add(key)
+            self.keyboard.keydown(key)
             if key == glfw.KEY_ESCAPE:
                 self.core.stop()
             elif key == glfw.KEY_L:
@@ -149,14 +171,7 @@ class KeyboardInputExtension(InputExtension):
 
     def get_controller_states(self) -> list[M64pButtons]:
         gamepad_state = self.gamepad.get_controller_state()
-        keyboard_state = M64pButtons()
-        for button in KEYBOARD_BUTTONS:
-            setattr(keyboard_state, button, int(KEYBOARD_BUTTONS[button] in self.pressed_keys))
-        x_axis = sum(value for key, value in KEYBOARD_AXES['X_AXIS'].items() if key in self.pressed_keys)
-        y_axis = sum(value for key, value in KEYBOARD_AXES['Y_AXIS'].items() if key in self.pressed_keys)
-        magnitude = np.sqrt(x_axis**2 + y_axis**2) + 1e-6
-        keyboard_state.X_AXIS = float_to_axis(x_axis / magnitude)
-        keyboard_state.Y_AXIS = float_to_axis(y_axis / magnitude)
+        keyboard_state = self.keyboard.get_controller_state()
         controller_state = combine_controller_states(keyboard_state, gamepad_state)
         return [controller_state] + [M64pButtons()] * 3
 

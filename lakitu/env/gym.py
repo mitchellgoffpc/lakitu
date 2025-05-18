@@ -210,10 +210,40 @@ if __name__ == "__main__":
     import einops
     import pygame
     import torch
+    from enum import Enum
 
-    from lakitu.training.diffusion.policy import DiffusionPolicy
     from lakitu.datasets.dataset import draw_actions, draw_info
     from lakitu.datasets.format import load_data
+    from lakitu.env.run import GamepadController, KeyboardController, combine_controller_states
+    from lakitu.training.diffusion.policy import DiffusionPolicy
+
+    class ControlMode(Enum):
+        HUMAN = 'HUMAN'
+        MODEL = 'MODEL'
+        REPLAY = 'REPLAY'
+
+    class PygameKeyboardController(KeyboardController):
+        JOYSTICK = {
+            'X_AXIS': {pygame.K_LEFT: -1, pygame.K_RIGHT: 1},
+            'Y_AXIS': {pygame.K_DOWN: -1, pygame.K_UP: 1},
+        }
+
+        KEYMAP = {
+            'R_DPAD': pygame.K_l,
+            'L_DPAD': pygame.K_j,
+            'U_DPAD': pygame.K_i,
+            'D_DPAD': pygame.K_k,
+            'START_BUTTON': pygame.K_RETURN,
+            'Z_TRIG': pygame.K_x,
+            'B_BUTTON': pygame.K_c,
+            'A_BUTTON': pygame.K_SPACE,
+            'R_CBUTTON': pygame.K_d,
+            'L_CBUTTON': pygame.K_a,
+            'D_CBUTTON': pygame.K_s,
+            'U_CBUTTON': pygame.K_w,
+            'R_TRIG': pygame.K_PERIOD,
+            'L_TRIG': pygame.K_COMMA,
+        }
 
     parser = argparse.ArgumentParser(description='Run N64 Gym Environment')
     parser.add_argument('rom_path', type=str, help='Path to the ROM file')
@@ -228,6 +258,8 @@ if __name__ == "__main__":
     screen = pygame.display.set_mode((W * 2, H * 2 + 100))
     pygame.display.set_caption('N64')
     clock = pygame.time.Clock()
+    gamepad = GamepadController()
+    keyboard = PygameKeyboardController()
 
     savestate_path = Path(args.replay) / "initial_state.m64p" if args.replay and not args.savestate else args.savestate
     env = N64Env(args.rom_path, savestate_path, render_mode="rgb_array", info_hooks={'level': m64_get_level})
@@ -236,34 +268,58 @@ if __name__ == "__main__":
     if args.policy:
         policy = DiffusionPolicy.from_pretrained(Path(args.policy), device='cuda' if torch.cuda.is_available() else 'cpu').eval()
         policy.reset()
+        control_mode = ControlMode.MODEL
     elif args.replay:
         episode_data = load_data(Path(args.replay) / 'episode.data')
+        control_mode = ControlMode.REPLAY
+    else:
+        control_mode = ControlMode.HUMAN
 
     frame_idx = 0
     while True:
-        if any(event.type == pygame.QUIT for event in pygame.event.get()):
-            break
-        elif args.replay and frame_idx >= len(episode_data['action.joystick']):
-            break
+        # Handle events
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+                env.close()
+                pygame.quit()
+                exit()
+            elif event.type == pygame.KEYUP:
+                keyboard.keyup(event.key)
+            elif event.type == pygame.KEYDOWN:
+                keyboard.keydown(event.key)
+                if event.key == pygame.K_TAB and args.policy and control_mode is not ControlMode.MODEL:
+                    control_mode = ControlMode.MODEL
+                    policy.reset()
 
-        # Sample action from policy or random
-        if args.policy:
-            observation = cv2.resize(observation, (W, H))
-            observation_tensor = torch.as_tensor(observation[None]).to(policy.config.device)
+        gamepad_state = gamepad.get_controller_state()
+        keyboard_state = keyboard.get_controller_state()
+        controller_state = combine_controller_states(gamepad_state, keyboard_state)
+        if any(getattr(controller_state, k) for k, *_ in M64pButtons._fields_):
+            control_mode = ControlMode.HUMAN
+
+        # Get action based on control mode
+        if control_mode is ControlMode.MODEL:
+            observation_resized = cv2.resize(observation, (W, H))
+            observation_tensor = torch.as_tensor(observation_resized[None]).to(policy.config.device)
             observation_tensor = einops.rearrange(observation_tensor, "b h w c -> b c h w").contiguous().float() / 255.0
             action_tensor = policy.select_action({'observation.image': observation_tensor})
             action = {k.removeprefix("action."): v.cpu().numpy()[0] for k, v in action_tensor.items()}
-        elif args.replay:
+        elif control_mode is ControlMode.REPLAY:
             action = {k: episode_data[f'action.{k}'][frame_idx] for k in env.action_space.keys()}
-        else:
-            action = env.action_space.sample()
+        elif control_mode == ControlMode.HUMAN:
+            action = {
+                'joystick': np.array([getattr(controller_state, k) / 127 for k in M64pButtons.get_joystick_fields()], dtype=np.float32),
+                'buttons': np.array([getattr(controller_state, k) for k in M64pButtons.get_button_fields()], dtype=bool),
+            }
+
+        # Take step in environment
         observation, reward, terminated, truncated, info = env.step(action)
 
-        # Convert numpy array to pygame surface and display
+        # Render
         surf = pygame.surfarray.make_surface(observation.swapaxes(0, 1))
         screen.blit(surf, (0, 0))
         draw_actions(screen, action['joystick'], action['buttons'], H * 2, W * 2, 100)
-        draw_info(screen, info, H * 2, W * 2)
+        draw_info(screen, {**info, 'controller': control_mode.value}, H * 2, W * 2)
 
         pygame.display.flip()
         clock.tick(30)
@@ -273,6 +329,3 @@ if __name__ == "__main__":
             observation, info = env.reset()
             if args.policy:
                 policy.reset()
-
-    env.close()
-    pygame.quit()
