@@ -1,5 +1,4 @@
-#!/usr/bin/env python
-import av
+#!/usr/bin/env pythona
 import cv2
 import math
 import random
@@ -15,6 +14,7 @@ import torch
 from tqdm import trange
 
 from lakitu.env.gym import N64Env, m64_get_level
+from lakitu.env.run import encode
 from lakitu.training.helpers.config import BaseConfig
 from lakitu.training.diffusion.policy import DiffusionPolicy
 
@@ -73,29 +73,28 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def rollout(env: gym.vector.AsyncVectorEnv, policy: DiffusionPolicy, output_dir: Path | None, seed: int, indices: list[int]) -> dict:
+def rollout(config: EvalConfig, policy: DiffusionPolicy, env: gym.vector.AsyncVectorEnv, indices: list[int]) -> dict:
     observation: np.ndarray
     reward: np.ndarray
 
     device = torch.device(policy.config.device)
     policy.reset()
-    observation, info = env.reset(seed=[seed + idx for idx in indices])
+    observation, info = env.reset(seed=[config.seed + idx for idx in indices])
 
-    containers = []
-    streams = []
-    if output_dir:
-        video_dir = output_dir / "videos"
-        video_dir.mkdir(parents=True, exist_ok=True)
+    # Set up encoder processes if output directory is specified
+    ctx = mp.get_context('spawn')
+    data_queues = []
+    encoder_processes = []
+    if config.output_dir:
+        info_fields = [('level', np.dtype(np.uint8), ())]
         for idx in indices:
-            width, height, fps = 320, 240, 30
-            container = av.open(str(video_dir / f"{idx:05d}.mp4"), mode='w')
-            stream = container.add_stream('h264', rate=fps)
-            stream.width = width
-            stream.height = height
-            stream.pix_fmt = 'yuv420p'
-            stream.codec_context.options = {'crf': '23', 'g': '30'}
-            containers.append(container)
-            streams.append(stream)
+            data_queue = ctx.Queue()
+            rollout_dir = config.output_dir / f"{idx:04d}"
+            savestate_path = config.env.savestate_path
+            encoder_process = ctx.Process(target=encode, args=(data_queue, rollout_dir, savestate_path, info_fields), daemon=True)
+            encoder_process.start()
+            data_queues.append(data_queue)
+            encoder_processes.append(encoder_process)
 
     all_actions = []
     all_rewards = []
@@ -113,10 +112,14 @@ def rollout(env: gym.vector.AsyncVectorEnv, policy: DiffusionPolicy, output_dir:
         action_tensor = policy.select_action({'observation.image': observation_tensor})
         action = {k.removeprefix("action."): v.cpu().numpy() for k, v in action_tensor.items()}
 
-        if output_dir:
-            for frame, container, stream in zip(observation, containers, streams, strict=True):
-                packet = stream.encode(av.VideoFrame.from_ndarray(frame, format='rgb24'))
-                container.mux(packet)
+        # Send frame data to encoders
+        for i, data_queue in enumerate(data_queues):
+            controller_state = M64pButtons()
+            controller_state.X_AXIS = int(action['joystick'][i][0] * 127)
+            controller_state.Y_AXIS = int(action['joystick'][i][1] * 127)
+            for j, button_name in enumerate(M64pButtons.get_button_fields()):
+                setattr(controller_state, button_name, int(action['buttons'][i][j]))
+            data_queue.put((observation[i], [controller_state], {'level': info['level'][i]}))
 
         observation, reward, terminated, truncated, info = env.step(action)
         done = terminated | truncated | done
@@ -131,20 +134,10 @@ def rollout(env: gym.vector.AsyncVectorEnv, policy: DiffusionPolicy, output_dir:
         progbar.set_postfix({"running_success_rate": f"{running_success_rate.item() * 100:.1f}%"})
         progbar.update()
 
-    # AsyncVectorEnv.call doesn't support different args for differnet workers
-    if output_dir:
-        savestate_dir = output_dir / "savestates"
-        savestate_dir.mkdir(parents=True, exist_ok=True)
-        for pipe, idx in zip(env.parent_pipes, indices, strict=True):
-            pipe.send(("_call", ('savestate', [savestate_dir / f"{idx:05d}.m64p"], {})))
-        env._state = gym.vector.async_vector_env.AsyncState.WAITING_CALL
-        env.call_wait()
-        env.reset()  # Seems like savestates won't be written until we run another step
-
-    for container, stream in zip(containers, streams, strict=True):
-        packet = stream.encode(None)
-        container.mux(packet)
-        container.close()
+    # Clean up encoder processes
+    for data_queue, encoder_process in zip(data_queues, encoder_processes, strict=True):
+        data_queue.put(None)
+        encoder_process.join()
 
     return {
         "action": {key: torch.stack([action[key] for action in all_actions], dim=1) for key in all_actions[0].keys()},
@@ -164,7 +157,7 @@ def eval_policy(config: EvalConfig, policy: DiffusionPolicy) -> dict:
     n_batches = int(math.ceil(num_episodes / env.num_envs))
     if config.output_dir:
         config.output_dir.mkdir(parents=True, exist_ok=True)
-        print(f"Saving videos to {config.output_dir}")
+        print(f"Saving episodes to {config.output_dir}")
 
     # Keep track of some metrics.
     sum_rewards = []
@@ -172,8 +165,8 @@ def eval_policy(config: EvalConfig, policy: DiffusionPolicy) -> dict:
     all_successes = []
 
     for batch_idx in range(n_batches):
-        start_idx, end_idx = batch_idx * env.num_envs, (batch_idx + 1) * env.num_envs
-        rollout_data = rollout(env, policy, config.output_dir, seed=config.seed, indices=list(range(start_idx, end_idx)))
+        start_idx, end_idx = batch_idx * env.num_envs, min((batch_idx + 1) * env.num_envs, num_episodes)
+        rollout_data = rollout(config, policy, env, indices=list(range(start_idx, end_idx)))
 
         # Figure out where in each rollout sequence the first done condition was encountered (results after this won't be included).
         n_steps = rollout_data["done"].shape[1]
@@ -205,7 +198,11 @@ def eval_policy(config: EvalConfig, policy: DiffusionPolicy) -> dict:
     }
 
 
-def eval_main(config: EvalPolicyConfig) -> None:
+if __name__ == "__main__":
+    import multiprocessing as mp
+    from lakitu.env.defs import M64pButtons
+
+    config = EvalPolicyConfig.from_cli()
     torch.backends.cudnn.benchmark = True
     torch.backends.cuda.matmul.allow_tf32 = True
     set_seed(config.eval.seed)
@@ -214,7 +211,3 @@ def eval_main(config: EvalPolicyConfig) -> None:
     policy = DiffusionPolicy.from_pretrained(config.policy_path, num_inference_steps=config.num_inference_steps, device=device)
     info = eval_policy(config.eval, policy)
     print(info["aggregated"])
-
-
-if __name__ == "__main__":
-    eval_main(EvalPolicyConfig.from_cli())
