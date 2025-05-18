@@ -2,6 +2,7 @@ import struct
 import numpy as np
 import multiprocessing as mp
 import gymnasium as gym
+from enum import IntEnum
 from pathlib import Path
 from typing import Any, Optional, Callable, Union
 
@@ -13,6 +14,45 @@ LIBRARY_PATH = Path('/usr/local/lib')
 PLUGINS_PATH = LIBRARY_PATH / 'mupen64plus'
 CONFIG_PATH = Path(__file__).parent / 'lib'
 DATA_PATH = Path('/usr/local/share/mupen64plus')
+
+class ControlMode(IntEnum):
+    HUMAN = 0
+    MODEL = 1
+    REPLAY = 2
+
+def m64_get_level(core: Core) -> int:
+    """Get the current level from memory"""
+    mem = core.core_mem_read(0x8032DDF8, 2)
+    result: int = struct.unpack('>H', mem)[0]  # n64 is big endian
+    return result
+
+def emulator_process(
+    rom_path: str,
+    savestate_path: str,
+    input_queue: mp.Queue,
+    data_queue: mp.Queue,
+    info_hooks: Optional[dict[str, Callable]]
+) -> None:
+    """Process that runs the emulator"""
+    core = Core(log_level=0)  # No logging
+    input_extension = RemoteInputExtension(core, input_queue, data_queue, savestate_path, info_hooks)
+    video_extension = VideoExtension(input_extension, offscreen=True)
+    core.core_startup(vidext=video_extension, inputext=input_extension)
+    core.load_plugins()
+
+    with open(rom_path, 'rb') as f:
+        romfile = f.read()
+    rval = core.rom_open(romfile)
+    if rval == ErrorType.SUCCESS:
+        core.rom_get_header()
+        core.rom_get_settings()
+
+    core.attach_plugins([PluginType.GFX, PluginType.INPUT, PluginType.RSP])
+    core.core_state_set(CoreState.SPEED_LIMITER, 0)
+    core.execute()
+    core.detach_plugins()
+    core.rom_close()
+
 
 class RemoteInputExtension(InputExtension):
     """Input plugin that receives controller states from a queue"""
@@ -45,34 +85,6 @@ class RemoteInputExtension(InputExtension):
             case _:
                 raise ValueError(f"Received unknown command in RemoteInputExtension: {next_input}")
         return controller_states
-
-
-def emulator_process(
-    rom_path: str,
-    savestate_path: str,
-    input_queue: mp.Queue,
-    data_queue: mp.Queue,
-    info_hooks: Optional[dict[str, Callable]]
-) -> None:
-    """Process that runs the emulator"""
-    core = Core(log_level=0)  # No logging
-    input_extension = RemoteInputExtension(core, input_queue, data_queue, savestate_path, info_hooks)
-    video_extension = VideoExtension(input_extension, offscreen=True)
-    core.core_startup(vidext=video_extension, inputext=input_extension)
-    core.load_plugins()
-
-    with open(rom_path, 'rb') as f:
-        romfile = f.read()
-    rval = core.rom_open(romfile)
-    if rval == ErrorType.SUCCESS:
-        core.rom_get_header()
-        core.rom_get_settings()
-
-    core.attach_plugins([PluginType.GFX, PluginType.INPUT, PluginType.RSP])
-    core.core_state_set(CoreState.SPEED_LIMITER, 0)
-    core.execute()
-    core.detach_plugins()
-    core.rom_close()
 
 
 class N64Env(gym.Env):
@@ -195,13 +207,6 @@ class N64Env(gym.Env):
             self.input_queue.put(("SAVE", path))
 
 
-def m64_get_level(core: Core) -> int:
-    """Get the current level from memory"""
-    mem = core.core_mem_read(0x8032DDF8, 2)
-    result: int = struct.unpack('>H', mem)[0]  # n64 is big endian
-    return result
-
-
 # Entry point for testing
 
 if __name__ == "__main__":
@@ -210,17 +215,11 @@ if __name__ == "__main__":
     import einops
     import pygame
     import torch
-    from enum import Enum
 
     from lakitu.datasets.dataset import draw_actions, draw_info
     from lakitu.datasets.format import load_data
-    from lakitu.env.run import GamepadController, KeyboardController, combine_controller_states
+    from lakitu.env.run import GamepadController, KeyboardController, combine_controller_states, encode
     from lakitu.training.diffusion.policy import DiffusionPolicy
-
-    class ControlMode(Enum):
-        HUMAN = 'HUMAN'
-        MODEL = 'MODEL'
-        REPLAY = 'REPLAY'
 
     class PygameKeyboardController(KeyboardController):
         JOYSTICK = {
@@ -250,6 +249,7 @@ if __name__ == "__main__":
     parser.add_argument('-s', '--savestate', type=str, default=None, help='Path to save state file')
     parser.add_argument('-p', '--policy', type=str, default=None, help='Path to policy file')
     parser.add_argument('-r', '--replay', type=str, default=None, help="Path of episode to replay")
+    parser.add_argument('-o', '--output', type=str, default=None, help='Path to output directory')
     args = parser.parse_args()
 
     # Initialize Pygame
@@ -260,6 +260,15 @@ if __name__ == "__main__":
     clock = pygame.time.Clock()
     gamepad = GamepadController()
     keyboard = PygameKeyboardController()
+
+    # Create the encoder process if recording
+    data_queue = None
+    ctx = mp.get_context('spawn')
+    if args.output:
+        data_queue = ctx.Queue()
+        info_fields = [('level', np.dtype(np.uint8), ()), ('control_mode', np.dtype(np.uint8), ())]
+        encoder_process = ctx.Process(target=encode, args=(data_queue, args.output, args.savestate, info_fields))
+        encoder_process.start()
 
     savestate_path = Path(args.replay) / "initial_state.m64p" if args.replay and not args.savestate else args.savestate
     env = N64Env(args.rom_path, savestate_path, render_mode="rgb_array", info_hooks={'level': m64_get_level})
@@ -276,13 +285,12 @@ if __name__ == "__main__":
         control_mode = ControlMode.HUMAN
 
     frame_idx = 0
-    while True:
+    running = True
+    while running:
         # Handle events
         for event in pygame.event.get():
             if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
-                env.close()
-                pygame.quit()
-                exit()
+                running = False
             elif event.type == pygame.KEYUP:
                 keyboard.keyup(event.key)
             elif event.type == pygame.KEYDOWN:
@@ -318,11 +326,20 @@ if __name__ == "__main__":
         # Take step in environment
         observation, reward, terminated, truncated, info = env.step(action)
 
+        # Send frame data to encoder
+        if data_queue:
+            controller_state = M64pButtons()
+            controller_state.X_AXIS = int(action['joystick'][0] * 127)
+            controller_state.Y_AXIS = int(action['joystick'][1] * 127)
+            for i, button_name in enumerate(M64pButtons.get_button_fields()):
+                setattr(controller_state, button_name, int(action['buttons'][i]))
+            data_queue.put((observation, [controller_state], {**info, 'control_mode': control_mode.value}))
+
         # Render
         surf = pygame.surfarray.make_surface(observation.swapaxes(0, 1))
         screen.blit(surf, (0, 0))
         draw_actions(screen, action['joystick'], action['buttons'], H * 2, W * 2, 100)
-        draw_info(screen, {**info, 'controller': control_mode.value}, H * 2, W * 2)
+        draw_info(screen, {**info, 'controller': control_mode.name}, H * 2, W * 2)
 
         pygame.display.flip()
         clock.tick(30)
@@ -332,3 +349,11 @@ if __name__ == "__main__":
             observation, info = env.reset()
             if args.policy:
                 policy.reset()
+
+    # Clean up
+    if data_queue:
+        data_queue.put(None)
+        encoder_process.join()
+
+    env.close()
+    pygame.quit()
