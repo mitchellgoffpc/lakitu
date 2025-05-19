@@ -5,10 +5,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Union, Iterator
 
+import numpy as np
 import torch
 from torch.optim import Optimizer
 
-from lakitu.datasets.dataset import EpisodeDataset
+from lakitu.env.gym import ControlMode
+from lakitu.datasets.dataset import EpisodeData, EpisodeDataset
 from lakitu.training.diffusion.eval import EvalConfig, eval_policy, set_seed
 from lakitu.training.diffusion.policy import DiffusionConfig, DiffusionPolicy
 from lakitu.training.helpers.checkpoint import save_checkpoint
@@ -65,16 +67,21 @@ class TrainConfig(BaseConfig):
 class EpisodeAwareSampler:
     def __init__(
         self,
-        episode_data_index: dict,
+        episodes: list[EpisodeData],
         episode_indices_to_use: Union[list, None] = None,
         drop_n_first_frames: int = 0,
         drop_n_last_frames: int = 0,
         shuffle: bool = False,
     ):
         indices: list[int] = []
-        for episode_idx, (start_index, end_index) in enumerate(zip(episode_data_index["from"], episode_data_index["to"], strict=True)):
+        for episode_idx, episode in enumerate(episodes):
             if episode_indices_to_use is None or episode_idx in episode_indices_to_use:
-                indices.extend(range(start_index + drop_n_first_frames, end_index - drop_n_last_frames))
+                if "info.control_mode" in episode.data.dtype.names:
+                    valid_mask = episode.data["info.control_mode"] == ControlMode.HUMAN.value
+                else:
+                    valid_mask = np.ones(len(episode.data), dtype=bool)
+                valid_indices = np.arange(episode.start_idx + drop_n_first_frames, episode.end_idx - drop_n_last_frames)
+                indices.extend(valid_indices[valid_mask].tolist())
 
         self.indices = indices
         self.shuffle = shuffle
@@ -163,10 +170,6 @@ def train(cfg: TrainConfig) -> None:
     dataset = EpisodeDataset(data_dir=cfg.dataset.data_dir, deltas=delta_timestamps)
     num_episodes = len(dataset.episodes)
     num_frames = sum(len(ep.data) for ep in dataset.episodes.values())
-    episode_data_index = {
-        "from": [ep.start_idx for ep in dataset.episodes.values()],
-        "to": [ep.end_idx for ep in dataset.episodes.values()],
-    }
 
     print("Creating policy")
     policy = DiffusionPolicy(cfg.policy).to(cfg.policy.device)
@@ -197,7 +200,7 @@ def train(cfg: TrainConfig) -> None:
 
     # create dataloader for offline training
     sampler = EpisodeAwareSampler(
-        episode_data_index,
+        list(dataset.episodes.values()),
         drop_n_last_frames=cfg.policy.drop_n_last_frames,
         shuffle=True,
     )
