@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import argparse
 import datetime
 import multiprocessing as mp
@@ -203,7 +204,7 @@ def encode(data_queue: mp.Queue, output_path: Path, savestate_path: Optional[str
 
         while (data := data_queue.get()) is not None:
             frame, controller_states, info = data
-            frame = cv2.resize(frame[::-1], (width, height))
+            frame = cv2.resize(frame, (width, height))
             av_frame = av.VideoFrame.from_ndarray(frame, format='rgb24')
             packet = stream.encode(av_frame)
             container.mux(packet)
@@ -270,7 +271,7 @@ if __name__ == '__main__':
     core.execute()
 
     # Cleanup
-    if args.record:
+    if args.output:
         assert data_queue is not None  # make mypy happy
         data_queue.put(None)
         encoder_thread.join()

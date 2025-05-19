@@ -355,7 +355,7 @@ class InputExtension:
             width, height = glfw.get_window_size(self.window)
             buffer = np.zeros((height, width, 3), dtype=np.uint8)
             self.gfx.ReadScreen2(buffer.ctypes.data_as(C.POINTER(C.c_uint8)), C.byref(C.c_int(width)), C.byref(C.c_int(height)), 0)
-            self.data_queue.put((buffer, self.controller_states, self.get_info()))
+            self.data_queue.put((buffer[::-1].copy(), self.controller_states, self.get_info()))
 
         self.savestate_path = None
         self.controller_states = None

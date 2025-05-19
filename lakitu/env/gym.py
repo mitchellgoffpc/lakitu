@@ -172,9 +172,8 @@ class N64Env(gym.Env):
             setattr(controller_state, button_name, int(action['buttons'][i]))
 
         self.input_queue.put([controller_state])
-        frame, _, info = self.data_queue.get()
+        observation, _, info = self.data_queue.get()
 
-        observation = frame[::-1]  # Flip vertically
         terminated = False
         truncated = False
         reward = 0.0
