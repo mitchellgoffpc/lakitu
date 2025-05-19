@@ -5,60 +5,11 @@ from pathlib import Path
 from dataclasses import dataclass
 from torch.utils.data import Dataset
 
-from lakitu.env.defs import M64pButtons
 from lakitu.datasets.format import load_data
 from lakitu.datasets.vidindex import CodecType, get_frame_info, get_mp4_boxes, get_decode_range
 
 DEFAULT_DATA_DIR = Path(__file__).parent.parent / 'data' / 'episodes'
 VIDEO_KEY = 'observation.image'
-
-BLACK = (0, 0, 0)
-WHITE = (255, 255, 255)
-RED = (255, 0, 0)
-GRAY = (128, 128, 128)
-
-def draw_info(screen, info, base_y, width):
-    import pygame
-    font = pygame.font.Font(None, 24)
-
-    # Draw text
-    x, y = width - 20, base_y
-    for key, value in info.items():
-        text = font.render(f"{key}: {value}", True, WHITE)
-        text_rect = text.get_rect(topright=(x, y))
-        screen.blit(text, text_rect)
-        y += 25
-
-def draw_actions(screen, joystick, buttons, base_y, width, height):
-    import pygame
-    font = pygame.font.Font(None, 24)
-
-    # Draw background
-    pygame.draw.rect(screen, BLACK, (0, base_y, width * 2, height))
-
-    # Draw joystick
-    joy_x, joy_y = joystick
-    center_x, center_y = 80, base_y + 50
-    pygame.draw.circle(screen, GRAY, (center_x, center_y), 30)
-    stick_x = center_x + joy_x.item() * 25
-    stick_y = center_y - joy_y.item() * 25
-    pygame.draw.circle(screen, RED, (stick_x, stick_y), 10)
-
-    # Draw buttons
-    button_names = M64pButtons.get_button_fields()
-    button_states = dict(zip(button_names, buttons, strict=True))
-    button_states = {k.split('_')[0]: button_states[k] for k in ('A_BUTTON', 'B_BUTTON', 'Z_TRIG', 'START_BUTTON')}
-    for i, (name, state) in enumerate(button_states.items()):
-        x = 160 + (i * 60)
-        y = base_y + 50
-        color = RED if state else GRAY
-        pygame.draw.circle(screen, color, (x, y), 15)
-        text = font.render(name, True, WHITE)
-        text_rect = text.get_rect(center=(x, y))
-        screen.blit(text, text_rect)
-
-
-# Episode Dataset
 
 @dataclass
 class EpisodeData:
@@ -78,6 +29,8 @@ class EpisodeDataset(Dataset):
         self.episodes_by_idx: list[str] = []
 
         for episode_dir in sorted(self.data_dir.iterdir()):
+            if not episode_dir.is_dir():
+                continue
             episode_name = episode_dir.name
             data_file = episode_dir / "episode.data"
             video_file = episode_dir / "episode.mp4"
@@ -182,6 +135,7 @@ if __name__ == "__main__":
     import time
     import argparse
     from tqdm import tqdm
+    from lakitu.env.gym import draw_actions, draw_info
 
     parser = argparse.ArgumentParser(description='Dataset visualization and benchmarking')
     parser.add_argument('mode', choices=['benchmark', 'visualize'], help='Mode to run in')
@@ -190,7 +144,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     delta_range = list(range(-args.frames_per_sample + 1, 1)) if args.frames_per_sample else [0]
-    deltas = {key: delta_range for key in ['observation.image', 'action.joystick', 'action.buttons']}
+    deltas = {key: delta_range for key in ['observation.image', 'action.joystick', 'action.buttons', 'info.level']}
     dataset = EpisodeDataset(args.data_dir, deltas=deltas)
 
     if args.mode == 'benchmark':
@@ -240,7 +194,9 @@ if __name__ == "__main__":
 
                         # Draw actions
             current_idx = len(batch['action.joystick']) - len(frames) - 1
+            info = {k.removeprefix('info.'): batch[k][current_idx] for k in batch if k.startswith('info.') and not k.endswith('.padded')}
             draw_actions(screen, batch['action.joystick'][current_idx], batch['action.buttons'][current_idx], H * 2, W * 2, 100)
+            draw_info(screen, info, H * 2, W * 2)
 
             pygame.display.flip()
             clock.tick(30)

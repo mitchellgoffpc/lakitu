@@ -15,16 +15,69 @@ PLUGINS_PATH = LIBRARY_PATH / 'mupen64plus'
 CONFIG_PATH = Path(__file__).parent / 'lib'
 DATA_PATH = Path('/usr/local/share/mupen64plus')
 
+BLACK = (0, 0, 0)
+WHITE = (255, 255, 255)
+RED = (255, 0, 0)
+GRAY = (128, 128, 128)
+
 class ControlMode(IntEnum):
     HUMAN = 0
     MODEL = 1
     REPLAY = 2
+
+
+# Helper functions
 
 def m64_get_level(core: Core) -> int:
     """Get the current level from memory"""
     mem = core.core_mem_read(0x8032DDF8, 2)
     result: int = struct.unpack('>H', mem)[0]  # n64 is big endian
     return result
+
+def draw_info(screen, info, base_y, width):
+    """Draw environment info on the bottom right of the pygame window"""
+    import pygame
+    font = pygame.font.Font(None, 24)
+
+    # Draw text
+    x, y = width - 20, base_y
+    for key, value in info.items():
+        text = font.render(f"{key}: {value}", True, WHITE)
+        text_rect = text.get_rect(topright=(x, y))
+        screen.blit(text, text_rect)
+        y += 25
+
+def draw_actions(screen, joystick, buttons, base_y, width, height):
+    """Draw action inputs at the bottom of the pygame window"""
+    import pygame
+    font = pygame.font.Font(None, 24)
+
+    # Draw background
+    pygame.draw.rect(screen, BLACK, (0, base_y, width * 2, height))
+
+    # Draw joystick
+    joy_x, joy_y = joystick
+    center_x, center_y = 80, base_y + 50
+    pygame.draw.circle(screen, GRAY, (center_x, center_y), 30)
+    stick_x = center_x + joy_x.item() * 25
+    stick_y = center_y - joy_y.item() * 25
+    pygame.draw.circle(screen, RED, (stick_x, stick_y), 10)
+
+    # Draw buttons
+    button_names = M64pButtons.get_button_fields()
+    button_states = dict(zip(button_names, buttons, strict=True))
+    button_states = {k.split('_')[0]: button_states[k] for k in ('A_BUTTON', 'B_BUTTON', 'Z_TRIG', 'START_BUTTON')}
+    for i, (name, state) in enumerate(button_states.items()):
+        x = 160 + (i * 60)
+        y = base_y + 50
+        color = RED if state else GRAY
+        pygame.draw.circle(screen, color, (x, y), 15)
+        text = font.render(name, True, WHITE)
+        text_rect = text.get_rect(center=(x, y))
+        screen.blit(text, text_rect)
+
+
+# Gym environment
 
 def emulator_process(
     rom_path: Path,
@@ -216,7 +269,6 @@ if __name__ == "__main__":
     import pygame
     import torch
 
-    from lakitu.datasets.dataset import draw_actions, draw_info
     from lakitu.datasets.format import load_data
     from lakitu.env.run import GamepadController, KeyboardController, combine_controller_states, encode
     from lakitu.training.diffusion.policy import DiffusionPolicy
