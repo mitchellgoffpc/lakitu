@@ -265,8 +265,9 @@ if __name__ == "__main__":
     import torch
 
     from lakitu.datasets.format import load_data
+    from lakitu.datasets.write import encode
     from lakitu.env.games import m64_get_level
-    from lakitu.env.run import GamepadController, KeyboardController, combine_controller_states, encode
+    from lakitu.env.run import GamepadController, KeyboardController, combine_controller_states
     from lakitu.training.diffusion.policy import DiffusionPolicy
 
     class PygameKeyboardController(KeyboardController):

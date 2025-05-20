@@ -14,10 +14,10 @@ import numpy as np
 import torch
 from tqdm import trange
 
+from lakitu.datasets.write import encode
 from lakitu.env.defs import M64pButtons
 from lakitu.env.games import m64_get_level
 from lakitu.env.gym import N64Env
-from lakitu.env.run import encode
 from lakitu.training.helpers.config import BaseConfig
 from lakitu.training.diffusion.policy import DiffusionPolicy
 
