@@ -128,6 +128,8 @@ class RemoteInputExtension(InputExtension):
                 self.core.stop()
             case "RESET":
                 self.core.reset()
+                if self.savestate_path:
+                    self.core.state_load(str(self.savestate_path))
             case ("SAVE", savestate_path):
                 savestate_path.parent.mkdir(parents=True, exist_ok=True)
                 self.core.state_save(str(savestate_path))
@@ -361,6 +363,10 @@ if __name__ == "__main__":
                 if event.key == pygame.K_TAB and args.policy and control_mode is not ControlMode.MODEL:
                     control_mode = ControlMode.MODEL
                     policy.reset()
+                if event.key == pygame.K_r:
+                    env.reset()
+                    if args.policy:
+                        policy.reset()
 
         gamepad_state = gamepad.get_controller_state()
         keyboard_state = keyboard.get_controller_state()

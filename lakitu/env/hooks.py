@@ -305,6 +305,7 @@ class InputExtension:
         self.savestate_path = savestate_path
         self.info_hooks = info_hooks or {}
         self.controller_states: Optional[list[M64pButtons]] = None
+        self.initialized = False
 
         # Input extension struct
         self.extension = M64pInputExtension()
@@ -348,7 +349,7 @@ class InputExtension:
             return
         if glfw.window_should_close(self.window):
             self.core.stop()
-        if self.savestate_path:
+        if self.savestate_path and not self.initialized:
             self.core.state_load(str(self.savestate_path))
         elif self.data_queue and self.controller_states:  # Only push one frame per input event
             # NOTE: We can also use glReadPixels to read the framebuffer, but using the official API removes the dependency on PyOpenGL
@@ -357,5 +358,5 @@ class InputExtension:
             self.gfx.ReadScreen2(buffer.ctypes.data_as(C.POINTER(C.c_uint8)), C.byref(C.c_int(width)), C.byref(C.c_int(height)), 0)
             self.data_queue.put((buffer[::-1].copy(), self.controller_states, self.get_info()))
 
-        self.savestate_path = None
+        self.initialized = True
         self.controller_states = None
