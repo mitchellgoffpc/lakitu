@@ -15,7 +15,7 @@ import numpy as np
 
 from lakitu.env.core import Core
 from lakitu.env.defs import PluginType, ErrorType, M64pButtons
-from lakitu.env.gym import m64_get_level
+from lakitu.env.games import m64_get_level
 from lakitu.env.hooks import VideoExtension, InputExtension
 from lakitu.datasets.format import Field, Writer
 

@@ -1,7 +1,6 @@
 import gymnasium as gym
 import multiprocessing as mp
 import numpy as np
-import struct
 from enum import IntEnum
 from pathlib import Path
 from typing import Any, Optional, Callable
@@ -27,12 +26,6 @@ class ControlMode(IntEnum):
 
 
 # Helper functions
-
-def m64_get_level(core: Core) -> int:
-    """Get the current level from memory"""
-    mem = core.core_mem_read(0x8032DDF8, 2)
-    result: int = struct.unpack('>H', mem)[0]  # n64 is big endian
-    return result
 
 def draw_info(screen, info, base_y, width):
     """Draw environment info on the bottom right of the pygame window"""
@@ -272,6 +265,7 @@ if __name__ == "__main__":
     import torch
 
     from lakitu.datasets.format import load_data
+    from lakitu.env.games import m64_get_level
     from lakitu.env.run import GamepadController, KeyboardController, combine_controller_states, encode
     from lakitu.training.diffusion.policy import DiffusionPolicy
 
