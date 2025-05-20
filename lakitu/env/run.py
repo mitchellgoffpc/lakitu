@@ -10,7 +10,6 @@ from typing import Any, Callable, Optional
 import av
 import cv2
 import glfw
-import hid
 import numpy as np
 
 from lakitu.env.core import Core
@@ -72,6 +71,7 @@ class GamepadController:
         self.reader.start()
 
     def read_gamepad_data(self) -> None:
+        import hid
         gamepad_device = next((device for device in hid.enumerate() if device['product_string'] == "Pro Controller"), None)
         if gamepad_device is None:
             return
