@@ -266,7 +266,7 @@ if __name__ == "__main__":
 
     from lakitu.datasets.format import load_data
     from lakitu.datasets.write import encode
-    from lakitu.env.games import m64_get_level
+    from lakitu.env.games import M64_INFO_HOOKS, M64_INFO_FIELDS
     from lakitu.env.run import GamepadController, KeyboardController, combine_controller_states
     from lakitu.training.diffusion.policy import DiffusionPolicy
 
@@ -326,12 +326,12 @@ if __name__ == "__main__":
     ctx = mp.get_context('spawn')
     if args.output:
         data_queue = ctx.Queue()
-        info_fields = [('level', np.dtype(np.uint8), ()), ('control_mode', np.dtype(np.uint8), ())]
+        info_fields = [*M64_INFO_FIELDS, ('control_mode', np.dtype(np.uint8), ())]
         output_path = Path(args.output) / datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         encoder_process = ctx.Process(target=encode, args=(data_queue, output_path, savestate_path, info_fields))
         encoder_process.start()
 
-    env = N64Env(Path(args.rom_path), savestate_path, render_mode="rgb_array", info_hooks={'level': m64_get_level})
+    env = N64Env(Path(args.rom_path), savestate_path, render_mode="rgb_array", info_hooks=M64_INFO_HOOKS)
     observation, info = env.reset()
 
     if args.policy:

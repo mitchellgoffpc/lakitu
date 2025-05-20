@@ -1,21 +1,21 @@
 from __future__ import annotations  # needed for ctypes._Pointer
 
-import sys
-import glfw
 import ctypes as C
-import numpy as np
 import logging as log
+import multiprocessing as mp
+import queue
+import sys
 from pathlib import Path
-from typing import Any, Callable, Optional, TYPE_CHECKING
+from typing import Any, Callable, Optional, Union
 
+import glfw
+import numpy as np
+
+from lakitu.env.core import Core
 from lakitu.env.defs import ErrorType, PluginType, RenderMode, ControllerPluginType, GLAttribute, GLProfile
 from lakitu.env.defs import VidExtFuncs, InputExtFuncs, M64pButtons, M64pControlInfo, M64pVideoExtension, M64pInputExtension
 
-if TYPE_CHECKING:
-    import queue
-    import multiprocessing
-    from lakitu.env.core import Core
-    Queue = queue.Queue | multiprocessing.Queue
+Queue = Union[queue.Queue, mp.Queue]
 
 class VideoExtension:
     """Mupen64Plus video extension that allows us to render to a glfw window."""
@@ -294,7 +294,7 @@ class InputExtension:
     """Mupen64Plus input extension that allows us to control the observation/action loop."""
 
     def __init__(self,
-        core: 'Core',
+        core: Core,
         data_queue: Optional['Queue'] = None,
         savestate_path: Optional[Path] = None,
         info_hooks: Optional[dict[str, Callable]] = None

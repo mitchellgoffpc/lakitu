@@ -16,7 +16,7 @@ from tqdm import trange
 
 from lakitu.datasets.write import encode
 from lakitu.env.defs import M64pButtons
-from lakitu.env.games import m64_get_level
+from lakitu.env.games import M64_INFO_HOOKS, M64_INFO_FIELDS
 from lakitu.env.gym import N64Env
 from lakitu.training.helpers.config import BaseConfig
 from lakitu.training.diffusion.policy import DiffusionPolicy
@@ -55,7 +55,7 @@ class EvalPolicyConfig(BaseConfig):
 
 class Mario64Env(N64Env):
     def __init__(self, *args, max_episode_steps=1000, **kwargs):
-        super().__init__(*args, **{**kwargs, 'info_hooks': {'level': m64_get_level}})
+        super().__init__(*args, **{**kwargs, 'info_hooks': M64_INFO_HOOKS})
         self._max_episode_steps = max_episode_steps
         self._step = 0
 
@@ -93,12 +93,11 @@ def rollout(config: EvalConfig, policy: DiffusionPolicy, env: gym.vector.AsyncVe
     data_queues = []
     encoder_processes = []
     if config.output_dir:
-        info_fields = [('level', np.dtype(np.uint8), ())]
         for idx in indices:
             data_queue = ctx.Queue()
             rollout_dir = config.output_dir / f"{idx:04d}"
             savestate_path = config.env.savestate_path
-            encoder_process = ctx.Process(target=encode, args=(data_queue, rollout_dir, savestate_path, info_fields), daemon=True)
+            encoder_process = ctx.Process(target=encode, args=(data_queue, rollout_dir, savestate_path, M64_INFO_FIELDS), daemon=True)
             encoder_process.start()
             data_queues.append(data_queue)
             encoder_processes.append(encoder_process)

@@ -13,7 +13,7 @@ import numpy as np
 from lakitu.datasets.write import encode
 from lakitu.env.core import Core
 from lakitu.env.defs import PluginType, ErrorType, M64pButtons
-from lakitu.env.games import m64_get_level
+from lakitu.env.games import M64_INFO_HOOKS, M64_INFO_FIELDS
 from lakitu.env.hooks import VideoExtension, InputExtension
 
 def parse_stick_data(report: list[int], left: bool = True) -> tuple[float, float]:
@@ -193,15 +193,14 @@ if __name__ == '__main__':
     ctx = mp.get_context('spawn')
     if args.output:
         data_queue = ctx.Queue()
-        info_fields = [('level', np.dtype(np.uint8), ())]
         output_path = Path(args.output) / datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         savestate_path = Path(args.savestate) if args.savestate else None
-        encoder_thread = ctx.Process(target=encode, args=(data_queue, output_path, savestate_path, info_fields))
+        encoder_thread = ctx.Process(target=encode, args=(data_queue, output_path, savestate_path, M64_INFO_FIELDS))
         encoder_thread.start()
 
     # Load the core and plugins
     core = Core()
-    input_extension = KeyboardInputExtension(core, data_queue, args.savestate, info_hooks={'level': m64_get_level})
+    input_extension = KeyboardInputExtension(core, data_queue, args.savestate, info_hooks=M64_INFO_HOOKS)
     video_extension = VideoExtension(input_extension)
     core.core_startup(vidext=video_extension, inputext=input_extension)
     core.load_plugins()

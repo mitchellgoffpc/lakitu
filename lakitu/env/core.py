@@ -360,7 +360,7 @@ class Core:
         dwords = []
         for _ in range(0, size, 4):
             rval: int = self.m64p.DebugMemRead32(C.c_uint(address))
-            dwords.append(struct.pack(">I", rval))  # n64 is big endian
+            dwords.append(struct.pack(">i", rval))  # n64 is big endian
         return b''.join(dwords)[:size]
 
     def state_load(self, state_path: Optional[str] = None) -> int:
