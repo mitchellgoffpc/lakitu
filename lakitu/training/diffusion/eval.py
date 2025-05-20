@@ -1,6 +1,7 @@
 #!/usr/bin/env pythona
 import cv2
 import math
+import multiprocessing as mp
 import random
 import time
 from dataclasses import dataclass, field
@@ -13,6 +14,7 @@ import numpy as np
 import torch
 from tqdm import trange
 
+from lakitu.env.defs import M64pButtons
 from lakitu.env.gym import N64Env, m64_get_level
 from lakitu.env.run import encode
 from lakitu.training.helpers.config import BaseConfig
@@ -63,6 +65,10 @@ class Mario64Env(N64Env):
         done = done or info['success']
         trunc = self._step >= self._max_episode_steps
         return obs, reward, done, trunc, info
+
+    def reset(self, *args, **kwargs):
+        self._step = 0
+        return super().reset(*args, **kwargs)
 
 
 def set_seed(seed: int) -> None:
@@ -199,9 +205,6 @@ def eval_policy(config: EvalConfig, policy: DiffusionPolicy) -> dict:
 
 
 if __name__ == "__main__":
-    import multiprocessing as mp
-    from lakitu.env.defs import M64pButtons
-
     config = EvalPolicyConfig.from_cli()
     torch.backends.cudnn.benchmark = True
     torch.backends.cuda.matmul.allow_tf32 = True
