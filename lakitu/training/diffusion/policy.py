@@ -33,9 +33,9 @@ class FeatureType(str, Enum):
     ACTION = "ACTION"
 
 class DType(str, Enum):
-    BOOL = "bool"
-    INT = "int"
-    FLOAT = "float"
+    BOOL = "BOOL"
+    INT = "INT"
+    FLOAT = "FLOAT"
 
 @dataclass
 class PolicyFeature:
