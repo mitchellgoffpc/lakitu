@@ -18,8 +18,8 @@ Field = tuple[str, np.dtype, tuple[int, ...]]
 #            first dimension, which will be inferred from the data. This allows us to append rows without modifying the header.
 # - Rest of file: Byte buffer
 
-def load_data(f: Path | BinaryIO) -> np.ndarray:
-    with open(f, 'rb') if isinstance(f, Path) else nullcontext(f) as f:
+def load_data(f: str | Path | BinaryIO) -> np.ndarray:
+    with open(f, 'rb') if isinstance(f, (str, Path)) else nullcontext(f) as f:
         header_length = struct.unpack('<I', f.read(4))[0]
         fields = json.loads(f.read(header_length).decode('utf-8'))
         buffer = f.read()
