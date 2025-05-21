@@ -16,60 +16,33 @@ from tqdm import trange
 
 from lakitu.datasets.write import encode
 from lakitu.env.defs import M64pButtons
-from lakitu.env.games import M64_INFO_HOOKS, M64_INFO_FIELDS
+from lakitu.env.games import M64_INFO_HOOKS, M64_INFO_FIELDS, M64_OBJECTIVES, SAVESTATE_DIR
 from lakitu.env.gym import N64Env
 from lakitu.training.helpers.config import BaseConfig
 from lakitu.training.diffusion.policy import DiffusionPolicy
 
 @dataclass
-class EnvConfig:
+class EvalConfig:
     rom_path: Path = Path(__file__).parents[3] / "Super Mario 64 (USA).z64"
-    savestate_path: Path | None = Path(__file__).parents[2] / "data" / "savestates" / "courtyard.m64p"
-    render_mode: str = "rgb_array"
-    episode_length: int = 1000
-    fps: int = 30
+    tasks: list[str] = field(default_factory=lambda: ["courtyard.m64p", "castle_entry.m64p", "princess_slide.m64p"])
+    output_dir: Path | None = None
+    num_episodes: int = 4
+    num_envs: int = 4
+    seed: int = 1000
 
     @property
     def gym_kwargs(self) -> dict[str, Any]:
         return {
             "rom_path": self.rom_path,
-            "savestate_path": self.savestate_path,
-            "render_mode": self.render_mode,
-            "max_episode_steps": self.episode_length
+            "render_mode": 'rgb_array',
+            "info_hooks": M64_INFO_HOOKS,
         }
-
-@dataclass
-class EvalConfig:
-    env: EnvConfig = field(default_factory=EnvConfig)
-    output_dir: Path | None = None
-    num_episodes: int = 4
-    num_envs: int = 4
-    seed: int = 1000
 
 @dataclass
 class EvalPolicyConfig(BaseConfig):
     policy_path: Path
     num_inference_steps: int = 10
     eval: EvalConfig = field(default_factory=EvalConfig)
-
-
-class Mario64Env(N64Env):
-    def __init__(self, *args, max_episode_steps=1000, **kwargs):
-        super().__init__(*args, **{**kwargs, 'info_hooks': M64_INFO_HOOKS})
-        self._max_episode_steps = max_episode_steps
-        self._step = 0
-
-    def step(self, action):
-        self._step += 1
-        obs, reward, done, trunc, info = super().step(action)
-        info['success'] = info['level'] != 16  # Level 16 is the castle courtyard
-        done = done or info['success']
-        trunc = self._step >= self._max_episode_steps
-        return obs, reward, done, trunc, info
-
-    def reset(self, *args, **kwargs):
-        self._step = 0
-        return super().reset(*args, **kwargs)
 
 
 def set_seed(seed: int) -> None:
@@ -80,13 +53,16 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def rollout(config: EvalConfig, policy: DiffusionPolicy, env: gym.vector.AsyncVectorEnv, indices: list[int]) -> dict:
+def rollout(config: EvalConfig, policy: DiffusionPolicy, env: gym.vector.AsyncVectorEnv, task: str, indices: list[int]) -> dict:
     observation: np.ndarray
     reward: np.ndarray
 
+    savestate_path = SAVESTATE_DIR / task
+    max_steps, objective = M64_OBJECTIVES[task]
     device = torch.device(policy.config.device)
     policy.reset()
-    observation, info = env.reset(seed=[config.seed + idx for idx in indices])
+    observation, info = env.reset(seed=[config.seed + idx for idx in indices], options={'savestate': savestate_path})
+    initial_info = info
 
     # Set up encoder processes if output directory is specified
     ctx = mp.get_context('spawn')
@@ -96,7 +72,6 @@ def rollout(config: EvalConfig, policy: DiffusionPolicy, env: gym.vector.AsyncVe
         for idx in indices:
             data_queue = ctx.Queue()
             rollout_dir = config.output_dir / f"{idx:04d}"
-            savestate_path = config.env.savestate_path
             encoder_process = ctx.Process(target=encode, args=(data_queue, rollout_dir, savestate_path, M64_INFO_FIELDS), daemon=True)
             encoder_process.start()
             data_queues.append(data_queue)
@@ -106,10 +81,10 @@ def rollout(config: EvalConfig, policy: DiffusionPolicy, env: gym.vector.AsyncVe
     all_rewards = []
     all_successes = []
     all_dones = []
+    step_idx = 0
 
     done = np.array([False] * env.num_envs)
     success = np.array([False] * env.num_envs)
-    max_steps = env.call("_max_episode_steps")[0]
     progbar = trange(max_steps, desc="Running rollouts", leave=False)
     while not np.all(done):
         observation = np.stack([cv2.resize(obs, (320, 240)) for obs in observation], axis=0)
@@ -125,11 +100,12 @@ def rollout(config: EvalConfig, policy: DiffusionPolicy, env: gym.vector.AsyncVe
             controller_state.Y_AXIS = int(action['joystick'][i][1] * 127)
             for j, button_name in enumerate(M64pButtons.get_button_fields()):
                 setattr(controller_state, button_name, int(action['buttons'][i][j]))
-            data_queue.put((observation[i], [controller_state], {'level': info['level'][i]}))
+            data_queue.put((observation[i], [controller_state], {k: v[i] for k, v in info.items()}))
 
         observation, reward, terminated, truncated, info = env.step(action)
-        done = terminated | truncated | done
-        success = success | info['success']
+        success = success | objective(initial_info, info)
+        done = done | terminated | truncated | success | (step_idx >= max_steps)
+        step_idx += 1
 
         all_actions.append({k: torch.as_tensor(v) for k, v in action.items()})
         all_rewards.append(torch.as_tensor(reward))
@@ -155,51 +131,52 @@ def rollout(config: EvalConfig, policy: DiffusionPolicy, env: gym.vector.AsyncVe
 
 @torch.no_grad()
 def eval_policy(config: EvalConfig, policy: DiffusionPolicy) -> dict:
-    env = gym.vector.AsyncVectorEnv([lambda: Mario64Env(**config.env.gym_kwargs)] * config.num_envs, daemon=False)
+    env = gym.vector.AsyncVectorEnv([lambda: N64Env(**config.gym_kwargs)] * config.num_envs, daemon=False)
 
     policy.eval()
     start = time.time()
-    num_episodes = config.num_episodes
-    n_batches = int(math.ceil(num_episodes / env.num_envs))
+    n_episodes_per_task = config.num_episodes
+    n_batches_per_task = int(math.ceil(n_episodes_per_task / env.num_envs))
     if config.output_dir:
         config.output_dir.mkdir(parents=True, exist_ok=True)
         print(f"Saving episodes to {config.output_dir}")
 
     # Keep track of some metrics.
-    sum_rewards = []
-    max_rewards = []
-    all_successes = []
+    sum_rewards, max_rewards, all_successes = [], [], []
+    for task_idx, task in enumerate(config.tasks):
+        task_offset = task_idx * n_episodes_per_task
+        batch_sum_rewards, batch_max_rewards, batch_successes = [], [], []
 
-    for batch_idx in range(n_batches):
-        start_idx, end_idx = batch_idx * env.num_envs, min((batch_idx + 1) * env.num_envs, num_episodes)
-        rollout_data = rollout(config, policy, env, indices=list(range(start_idx, end_idx)))
+        for batch_idx in range(n_batches_per_task):
+            start_idx = task_offset + batch_idx * env.num_envs
+            end_idx = task_offset + min((batch_idx + 1) * env.num_envs, n_episodes_per_task)
+            rollout_data = rollout(config, policy, env, task, indices=list(range(start_idx, end_idx)))
 
-        # Figure out where in each rollout sequence the first done condition was encountered (results after this won't be included).
-        n_steps = rollout_data["done"].shape[1]
-        done_indices = torch.argmax(rollout_data["done"].long(), dim=1)  # Get the first done index for each batch element
+            # Figure out where in each rollout sequence the first done condition was encountered (results after this won't be included).
+            n_steps = rollout_data["done"].shape[1]
+            done_indices = torch.argmax(rollout_data["done"].long(), dim=1)  # Get the first done index for each batch element
 
-        # Make a mask with shape (batch, n_steps) to mask out rollout data after the first done
-        # (batch-element-wise). Note the `done_indices + 1` to make sure to keep the data from the done step.
-        mask = (torch.arange(n_steps) <= einops.repeat(done_indices + 1, "b -> b s", s=n_steps)).int()
+            # Make a mask with shape (batch, n_steps) to mask out rollout data after the first done
+            # (batch-element-wise). Note the `done_indices + 1` to make sure to keep the data from the done step.
+            mask = (torch.arange(n_steps) <= einops.repeat(done_indices + 1, "b -> b s", s=n_steps)).int()
 
-        sum_rewards.extend(einops.reduce((rollout_data["reward"] * mask), "b n -> b", "sum").tolist())
-        max_rewards.extend(einops.reduce((rollout_data["reward"] * mask), "b n -> b", "max").tolist())
-        all_successes.extend(einops.reduce((rollout_data["success"] * mask), "b n -> b", "any").tolist())
+            batch_sum_rewards.extend(einops.reduce((rollout_data["reward"] * mask), "b n -> b", "sum").tolist())
+            batch_max_rewards.extend(einops.reduce((rollout_data["reward"] * mask), "b n -> b", "max").tolist())
+            batch_successes.extend(einops.reduce((rollout_data["success"] * mask), "b n -> b", "any").tolist())
+
+        sum_rewards.extend(batch_sum_rewards[:n_episodes_per_task])
+        max_rewards.extend(batch_max_rewards[:n_episodes_per_task])
+        all_successes.extend(batch_successes[:n_episodes_per_task])
 
     env.close()
 
     return {
-        "per_episode": [
-            {"episode_idx": i, "sum_reward": sum_reward, "max_reward": max_reward, "success": success}
-                for i, (sum_reward, max_reward, success)
-                in enumerate(zip(sum_rewards, max_rewards, all_successes, strict=True))
-        ][:num_episodes],
         "aggregated": {
-            "avg_sum_reward": float(np.nanmean(sum_rewards[:num_episodes])),
-            "avg_max_reward": float(np.nanmean(max_rewards[:num_episodes])),
-            "pc_success": float(np.nanmean(all_successes[:num_episodes]) * 100),
+            "avg_sum_reward": float(np.nanmean(sum_rewards)),
+            "avg_max_reward": float(np.nanmean(max_rewards)),
+            "pc_success": float(np.nanmean(all_successes) * 100),
             "eval_s": time.time() - start,
-            "eval_ep_s": (time.time() - start) / num_episodes,
+            "eval_ep_s": (time.time() - start) / (n_episodes_per_task * len(config.tasks)),
         },
     }
 
