@@ -119,10 +119,10 @@ class RemoteInputExtension(InputExtension):
         match next_input:
             case "STOP":
                 self.core.stop()
-            case "RESET":
+            case ("RESET", savestate_path):
                 self.core.reset()
-                if self.savestate_path:
-                    self.core.state_load(str(self.savestate_path))
+                if savestate_path or self.savestate_path:
+                    self.core.state_load(str(savestate_path or self.savestate_path))
             case ("SAVE", savestate_path):
                 savestate_path.parent.mkdir(parents=True, exist_ok=True)
                 self.core.state_save(str(savestate_path))
@@ -187,9 +187,8 @@ class N64Env(gym.Env):
         self.current_frame = None
         if self.emulator_proc is None:
             self._start_emulator()
-            self.input_queue.put([M64pButtons()])  # Send an initial empty state to the emulator
-        else:
-            self.input_queue.put("RESET")
+        savestate = (options or {}).get('savestate')
+        self.input_queue.put(("RESET", savestate))
         frame, _, info = self.data_queue.get()  # Wait for the emulator to reset
 
         return frame, info
@@ -295,7 +294,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Run N64 Gym Environment')
     parser.add_argument('rom_path', type=str, help='Path to the ROM file')
-    parser.add_argument('-s', '--savestate', type=str, default=None, help='Path to save state file')
+    parser.add_argument('-s', '--savestate', type=str, default=None, help='Path to savestate file')
     parser.add_argument('-p', '--policy', type=str, default=None, help='Path to policy file')
     parser.add_argument('-r', '--replay', type=str, default=None, help="Path of episode to replay")
     parser.add_argument('-o', '--output', type=str, default=None, help='Path to output directory')
