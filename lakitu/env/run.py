@@ -13,7 +13,7 @@ import numpy as np
 from lakitu.datasets.write import encode
 from lakitu.env.core import Core
 from lakitu.env.defs import PluginType, ErrorType, M64pButtons
-from lakitu.env.games import M64_INFO_HOOKS, M64_INFO_FIELDS
+from lakitu.env.games import M64_INFO_HOOKS, M64_INFO_FIELDS, SAVESTATE_DIR
 from lakitu.env.hooks import VideoExtension, InputExtension
 
 def parse_stick_data(report: list[int], left: bool = True) -> tuple[float, float]:
@@ -161,9 +161,8 @@ class KeyboardInputExtension(InputExtension):
             elif key == glfw.KEY_M:
                 self.core.toggle_mute()
             elif key == glfw.KEY_GRAVE_ACCENT:
-                savestate_dir = Path(__file__).parent.parent / 'data' / 'savestates'
-                savestate_dir.mkdir(parents=True, exist_ok=True)
-                savestate_paths = (savestate_dir / f'savestate_{i}.m64p' for i in range(100))
+                SAVESTATE_DIR.mkdir(parents=True, exist_ok=True)
+                savestate_paths = (SAVESTATE_DIR / f'savestate_{i}.m64p' for i in range(100))
                 savestate_path = next(path for path in savestate_paths if not path.exists())
                 self.core.state_save(str(savestate_path))
 
@@ -179,7 +178,7 @@ class KeyboardInputExtension(InputExtension):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Run Lakitu environment')
     parser.add_argument('rom_path', type=str, help='Path to the ROM file')
-    parser.add_argument('-s', '--savestate', type=str, default=None, help='Path to save state file')
+    parser.add_argument('-s', '--savestate', type=str, default=None, help='Path to savestate file')
     parser.add_argument('-o', '--output', type=str, default=None, help='Path to output directory')
     args = parser.parse_args()
 

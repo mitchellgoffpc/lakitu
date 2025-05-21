@@ -72,12 +72,12 @@ M64_INFO_HOOKS = {k: v for k, v in M64_INFO_HOOKS.items() if k in M64_INFO_ACTIV
 M64_INFO_FIELDS = [(k, d, s) for k, d, s in M64_INFO_FIELDS if k in M64_INFO_ACTIVE_KEYS]
 
 M64_OBJECTIVES = {
-    'courtyard.m64p': lambda initial_state, current_state: current_state['level'] == 6,  # Enter the castle
-    'castle_entry.m64p': lambda initial_state, current_state: current_state['level'] == 9,  # Enter bobomb battlefield
-    'princess_slide.m64p': lambda initial_state, current_state: current_state['num_stars'] == initial_state['num_stars'] + 1,
+    'courtyard.m64p': (1000, lambda initial_state, current_state: current_state['level'] == 6),  # Enter the castle
+    'castle_entry.m64p': (600, lambda initial_state, current_state: current_state['level'] == 9),  # Enter bobomb battlefield
+    'princess_slide.m64p': (1500, lambda initial_state, current_state: current_state['num_stars'] == initial_state['num_stars'] + 1),
 }
 
-SAVESTATE_DIR = Path(__file__).parents[2] / "data" / "savestates"
+SAVESTATE_DIR = Path(__file__).parents[1] / "data" / "savestates"
 SAVESTATE_HASHES = {}
 for savestate_file in SAVESTATE_DIR.glob("*.m64p"):
     savestate_data = savestate_file.read_bytes()
