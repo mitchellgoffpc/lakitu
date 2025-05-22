@@ -21,7 +21,7 @@ class TestEpisodeDataset(unittest.TestCase):
 
     def create_dataset(self, frames_per_sample=1):
         deltas = list(range(frames_per_sample))
-        dataset = EpisodeDataset(data_dir=self.data_dir, deltas={'observation.image': deltas, 'action.buttons': deltas})
+        dataset = EpisodeDataset([self.data_dir], deltas={'observation.image': deltas, 'action.buttons': deltas})
         episode_name = self.episode_dir.name
         dataset.episodes = {episode_name: dataset.episodes[episode_name]}
         dataset.episodes_by_idx = [episode_name] * len(dataset.episodes[episode_name].data)

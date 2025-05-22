@@ -1,8 +1,9 @@
-import av
-import torch
-import numpy as np
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
+
+import av
+import numpy as np
+import torch
 from torch.utils.data import Dataset
 
 from lakitu.datasets.format import load_data
@@ -14,6 +15,7 @@ VIDEO_KEY = 'observation.image'
 @dataclass
 class EpisodeData:
     name: str
+    path: Path
     data: np.ndarray
     codec: CodecType
     frame_info: list[tuple[int, int, bool, int]]
@@ -22,38 +24,40 @@ class EpisodeData:
     end_idx: int
 
 class EpisodeDataset(Dataset):
-    def __init__(self, data_dir=DEFAULT_DATA_DIR, deltas=None):
-        self.data_dir = Path(data_dir)
+    def __init__(self, data_dirs: list[Path], deltas: dict[str, list[int]]) -> None:
+        self.data_dirs = data_dirs
         self.deltas = deltas or {}
         self.episodes = {}
         self.episodes_by_idx: list[str] = []
 
-        for episode_dir in sorted(self.data_dir.iterdir()):
-            if not episode_dir.is_dir():
-                continue
-            episode_name = episode_dir.name
-            data_file = episode_dir / "episode.data"
-            video_file = episode_dir / "episode.mp4"
-            assert data_file.exists(), f"Missing {data_file}"
-            assert video_file.exists(), f"Missing {video_file}"
+        for data_dir in self.data_dirs:
+            for episode_dir in sorted(data_dir.iterdir()):
+                if not episode_dir.is_dir():
+                    continue
+                episode_name = episode_dir.name
+                data_file = episode_dir / "episode.data"
+                video_file = episode_dir / "episode.mp4"
+                assert data_file.exists(), f"Missing {data_file}"
+                assert video_file.exists(), f"Missing {video_file}"
 
-            data = load_data(data_file)
-            boxes = get_mp4_boxes(video_file)
-            codec_type, frame_info, extradata = get_frame_info(boxes)
-            start_idx = len(self.episodes_by_idx)
-            end_idx = start_idx + len(data)
-            assert len(frame_info) == len(data), f"Mismatch between video and data length for {video_file.name}"
-            self.episodes[episode_name] = EpisodeData(episode_name, data, codec_type, frame_info, extradata, start_idx, end_idx)
-            self.episodes_by_idx.extend([episode_name] * len(data))
+                data = load_data(data_file)
+                boxes = get_mp4_boxes(video_file)
+                codec_type, frame_info, extradata = get_frame_info(boxes)
+                start_idx = len(self.episodes_by_idx)
+                end_idx = start_idx + len(data)
+                assert len(frame_info) == len(data), f"Mismatch between video and data length for {video_file.name}"
+                self.episodes[episode_name] = \
+                    EpisodeData(episode_name, data_dir / episode_name, data, codec_type, frame_info, extradata, start_idx, end_idx)
+                self.episodes_by_idx.extend([episode_name] * len(data))
 
         # Need to create the decoders lazily since they can't be pickled for the multiprocessing workers
         self.decoders: dict[CodecType, av.VideoCodecContext] = {}
         self.decoder_ages: dict[CodecType, int] = {}
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.episodes_by_idx)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         episode_name = self.episodes_by_idx[idx]
         episode = self.episodes[episode_name]
         frame_idx = idx - episode.start_idx
@@ -81,7 +85,7 @@ class EpisodeDataset(Dataset):
 
         return batch
 
-    def get_frame_data(self, episode, frame_idx, frame_deltas):
+    def get_frame_data(self, episode: EpisodeData, frame_idx: int, frame_deltas: list[int]) -> tuple[np.ndarray, int, int]:
         decode_start_idx, decode_end_idx = \
             get_decode_range(episode.frame_info, frame_idx + frame_deltas[0], frame_deltas[-1] - frame_deltas[0] + 1)
 
@@ -93,7 +97,7 @@ class EpisodeDataset(Dataset):
             self.decoders[episode.codec] = av.CodecContext.create(episode.codec.value, 'r')  # type: ignore
         self.decoder_ages[episode.codec] += 1
 
-        boxes = get_mp4_boxes(self.data_dir / episode.name / "episode.mp4")
+        boxes = get_mp4_boxes(episode.path / "episode.mp4")
         video_data = boxes['mdat']
         decoder: av.VideoCodecContext = self.decoders[episode.codec]
         decoder.extradata = episode.extradata
@@ -122,7 +126,7 @@ class EpisodeDataset(Dataset):
         frames = frames[start_idx - decode_start_idx:end_idx - decode_start_idx]
         return frames, start_idx, end_idx
 
-    def get_tabular_data(self, episode, frame_idx, deltas, key):
+    def get_tabular_data(self, episode: EpisodeData, frame_idx: int, deltas: list[int], key: str) -> tuple[np.ndarray, int, int]:
         start_idx = max(frame_idx + deltas[0], 0)
         end_idx = min(frame_idx + deltas[-1] + 1, len(episode.data))
         data = list(episode.data[start_idx:end_idx][key])
@@ -145,7 +149,7 @@ if __name__ == "__main__":
 
     delta_range = list(range(-args.frames_per_sample + 1, 1)) if args.frames_per_sample else [0]
     deltas = {key: delta_range for key in ['observation.image', 'action.joystick', 'action.buttons', 'info.level']}
-    dataset = EpisodeDataset(args.data_dir, deltas=deltas)
+    dataset = EpisodeDataset([Path(args.data_dir)], deltas=deltas)
 
     if args.mode == 'benchmark':
         dataset[0]
