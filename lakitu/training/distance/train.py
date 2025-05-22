@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 import random
 import time
 from dataclasses import dataclass, field, asdict, replace
@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 import torch
+from numpy.lib import recfunctions as rfn
 from torch.optim import Optimizer
 
 from lakitu.datasets.dataset import EpisodeDataset
@@ -22,7 +23,7 @@ LRScheduler = Any
 
 @dataclass
 class DatasetConfig:
-    data_dir: Path = Path(__file__).parent.parent / 'data' / 'episodes'
+    data_dirs: list[Path] = field(default_factory=lambda: [Path(__file__).parents[2] / 'data' / 'episodes'])
     episodes: list[int] | None = None
 
 @dataclass
@@ -57,6 +58,14 @@ class TrainConfig(BaseConfig):
     optimizer: AdamConfig = field(default_factory=AdamConfig)
     scheduler: LRSchedulerConfig = field(default_factory=LRSchedulerConfig)
     wandb: WandBConfig = field(default_factory=WandBConfig)
+
+
+class DistanceDataset(EpisodeDataset):
+    def __init__(self, data_dirs: list[Path], deltas: dict[str, list[int]]) -> None:
+        super().__init__(data_dirs=data_dirs, deltas=deltas)
+        for episode in self.episodes.values():
+            distances = np.full(len(episode.data), 1000, dtype=np.int32)
+            episode.data = rfn.append_fields(episode.data, 'state.distance', distances, dtypes='int32', usemask=False)
 
 
 def get_step_identifier(step: int, total_steps: int) -> str:
@@ -111,7 +120,7 @@ def update_model(
         train_metrics.grad_norm = grad_norm.item()
         train_metrics.lr = optimizer.param_groups[0]["lr"]
         train_metrics.update_s = time.perf_counter() - start_time
-    return train_metrics, {k: v.item() for k, v in output_dict.items()}
+    return train_metrics, {} # k: v.item() for k, v in output_dict.items()}
 
 
 def train(cfg: TrainConfig) -> None:
@@ -125,8 +134,8 @@ def train(cfg: TrainConfig) -> None:
     torch.backends.cuda.matmul.allow_tf32 = True
 
     print("Creating dataset")
-    delta_timestamps = {k: [0] for k in cfg.model.input_features.keys()}
-    dataset = EpisodeDataset(data_dir=cfg.dataset.data_dir, deltas=delta_timestamps)
+    delta_timestamps = {k: [0] for k in cfg.model.input_features.keys() | cfg.model.output_features.keys()}
+    dataset = DistanceDataset(cfg.dataset.data_dirs, deltas=delta_timestamps)
     num_episodes = len(dataset.episodes)
     num_frames = sum(len(ep.data) for ep in dataset.episodes.values())
 

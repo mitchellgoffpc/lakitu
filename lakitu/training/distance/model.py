@@ -16,7 +16,7 @@ from lakitu.training.diffusion.policy import PolicyFeature, FeatureType, Normali
 @dataclass
 class DistanceEstimatorConfig(BaseConfig):
     device: str = "cuda"
-    n_obs_steps: int = 2
+    n_obs_steps: int = 1
 
     input_features: dict[str, PolicyFeature] = field(default_factory=lambda: {
         "observation.image": PolicyFeature(
@@ -49,10 +49,10 @@ class DistanceEstimatorConfig(BaseConfig):
 
 # Helper functions
 
-def _get_distance_target(distance: int) -> Tensor:
-    buckets = [i ** 2 for i in range(5, 11)] + [float('inf')]
+def _get_distance_target(distance: Tensor) -> Tensor:
+    buckets = [2 ** i for i in range(5, 11)] + [float('inf')]
     bucket = next(i for i, b in enumerate(buckets) if distance < b)
-    return torch.tensor(bucket, dtype=torch.long)
+    return torch.tensor(bucket, dtype=torch.long, device=distance.device)
 
 def _replace_batchnorm(module: nn.Module) -> nn.Module:
     for name, child in module.named_children():
