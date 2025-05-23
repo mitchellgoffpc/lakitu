@@ -44,8 +44,12 @@ def m64_get_num_coins(core: Core) -> int:
 def m64_get_position(core: Core) -> list[float]:
     """Get the current position of the player"""
     mem = core.core_mem_read(0x8033B1AC, 12)
-    result: list[float] = list(struct.unpack('>fff', mem))
-    return result
+    return list(struct.unpack('>fff', mem))
+
+def m64_get_savefile(core: Core) -> np.ndarray:
+    """Get the savefile data"""
+    mem = core.core_mem_read(0x80207700, 112)
+    return np.frombuffer(mem, dtype=np.uint8)
 
 M64_INFO_HOOKS = {
     "level": m64_get_level,
