@@ -85,7 +85,7 @@ class EpisodeDataset(Dataset):
 
         return batch
 
-    def get_frame_data(self, episode: EpisodeData, frame_idx: int, frame_deltas: list[int]) -> tuple[np.ndarray, int, int]:
+    def get_frame_data(self, episode: EpisodeData, frame_idx: int, frame_deltas: list[int]) -> tuple[list[np.ndarray], int, int]:
         decode_start_idx, decode_end_idx = \
             get_decode_range(episode.frame_info, frame_idx + frame_deltas[0], frame_deltas[-1] - frame_deltas[0] + 1)
 
@@ -126,7 +126,7 @@ class EpisodeDataset(Dataset):
         frames = frames[start_idx - decode_start_idx:end_idx - decode_start_idx]
         return frames, start_idx, end_idx
 
-    def get_tabular_data(self, episode: EpisodeData, frame_idx: int, deltas: list[int], key: str) -> tuple[np.ndarray, int, int]:
+    def get_tabular_data(self, episode: EpisodeData, frame_idx: int, deltas: list[int], key: str) -> tuple[list[np.ndarray], int, int]:
         start_idx = max(frame_idx + deltas[0], 0)
         end_idx = min(frame_idx + deltas[-1] + 1, len(episode.data))
         data = list(episode.data[start_idx:end_idx][key])
@@ -156,14 +156,13 @@ if __name__ == "__main__":
         num_samples = 50
         start_time = time.perf_counter()
         for idx in tqdm(np.random.randint(0, len(dataset), size=num_samples)):
-            dataset[idx]
+            dataset[int(idx)]
         elapsed = time.perf_counter() - start_time
         print(f"Processed {num_samples} samples in {elapsed:.2f} seconds")
         print(f"Average speed: {num_samples/elapsed:.2f} samples/second")
 
     elif args.mode == 'visualize':
-        frame = dataset[0]['observation.image']
-        _, _, H, W = frame.shape
+        _, _, H, W = dataset[0]['observation.image'].shape
 
         import cv2
         import pygame
