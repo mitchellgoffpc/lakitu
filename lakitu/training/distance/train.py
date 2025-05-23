@@ -65,7 +65,7 @@ class DistanceDataset(EpisodeDataset):
         super().__init__(data_dirs=data_dirs, deltas=deltas)
         for episode in self.episodes.values():
             distances = np.full(len(episode.data), 1000, dtype=np.int32)
-            episode.data = rfn.append_fields(episode.data, 'state.distance', distances, dtypes=[np.dtype(np.int32)], usemask=False)
+            episode.data = rfn.append_fields(episode.data, 'info.distance', distances, dtypes=[np.dtype(np.int32)], usemask=False)
 
 
 def get_step_identifier(step: int, total_steps: int) -> str:

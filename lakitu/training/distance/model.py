@@ -24,7 +24,7 @@ class DistanceEstimatorConfig(BaseConfig):
         ),
     })
     output_features: dict[str, PolicyFeature] = field(default_factory=lambda: {
-        "state.distance": PolicyFeature(type=FeatureType.STATE, shape=(7,), dtype=DType.FLOAT, norm_mode=NormalizationMode.IDENTITY),
+        "info.distance": PolicyFeature(type=FeatureType.STATE, shape=(7,), dtype=DType.FLOAT, norm_mode=NormalizationMode.IDENTITY),
     })
 
     vision_backbone: str = "resnet18"
@@ -106,7 +106,7 @@ class DistanceEstimator(nn.Module):
 
     def compute_loss(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict[str, Tensor]]:
         pred = self(batch)
-        targets = torch.stack([_get_distance_target(d) for d in batch["state.distance"]], dim=0)
+        targets = torch.stack([_get_distance_target(d) for d in batch["info.distance"]], dim=0)
         assert pred.shape == (*targets.shape, self.config.output_size)
         loss = F.cross_entropy(pred, targets)
         return loss, {'pred': pred}
@@ -161,6 +161,6 @@ if __name__ == "__main__":
     # Create dummy batch and run forward pass
     batch = {
         "observation.image": torch.randn(2, 2, 3, 240, 320).to(config.device),
-        "state.distance": torch.randint(0, 2048, (2, 1)).to(config.device),
+        "info.distance": torch.randint(0, 2048, (2, 1)).to(config.device),
     }
     pred = model.compute_loss(batch)
