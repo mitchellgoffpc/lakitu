@@ -11,6 +11,7 @@ import torch
 from numpy.lib import recfunctions as rfn
 from torch.optim import Optimizer
 
+from lakitu.env.games import get_savestate_objective
 from lakitu.datasets.dataset import EpisodeDataset
 from lakitu.training.distance.model import DistanceEstimatorConfig, DistanceEstimator
 from lakitu.training.helpers.checkpoint import save_checkpoint
@@ -64,7 +65,13 @@ class DistanceDataset(EpisodeDataset):
     def __init__(self, data_dirs: list[Path], deltas: dict[str, list[int]]) -> None:
         super().__init__(data_dirs=data_dirs, deltas=deltas)
         for episode in self.episodes.values():
-            distances = np.full(len(episode.data), 1000, dtype=np.int32)
+            objective = get_savestate_objective(episode.path / 'initial_state.m64p')
+            info = rfn.rename_fields(episode.data, {k: k.removeprefix('info.') for k in episode.data.dtype.names if k.startswith('info.')})
+            complete = objective(info[0], info)
+            if np.any(complete):
+                distances = np.maximum(-(np.arange(len(episode.data), dtype=np.int32) - np.argmax(complete)), 0)
+            else:
+                distances = np.full(len(episode.data), -1, dtype=np.int32)
             episode.data = rfn.append_fields(episode.data, 'info.distance', distances, dtypes=[np.dtype(np.int32)], usemask=False)
 
 

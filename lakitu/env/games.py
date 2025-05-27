@@ -2,6 +2,7 @@ import hashlib
 import numpy as np
 import struct
 from pathlib import Path
+from typing import Callable
 
 from lakitu.env.core import Core
 
@@ -75,7 +76,7 @@ M64_INFO_ACTIVE_KEYS = ['level', 'level_act', 'num_stars']
 M64_INFO_HOOKS = {k: v for k, v in M64_INFO_HOOKS.items() if k in M64_INFO_ACTIVE_KEYS}
 M64_INFO_FIELDS = [(k, d, s) for k, d, s in M64_INFO_FIELDS if k in M64_INFO_ACTIVE_KEYS]
 
-M64_OBJECTIVES = {
+M64_OBJECTIVES: dict[str, tuple[int, Callable]] = {
     'courtyard.m64p': (1000, lambda initial_state, current_state: current_state['level'] == 6),  # Enter the castle
     'castle_entry.m64p': (600, lambda initial_state, current_state: current_state['level'] == 9),  # Enter bobomb battlefield
     'princess_slide.m64p': (1500, lambda initial_state, current_state: current_state['num_stars'] == initial_state['num_stars'] + 1),
@@ -95,3 +96,11 @@ def get_savestate_name(savestate_file: Path) -> str:
     if savestate_hash not in SAVESTATE_HASHES:
         raise ValueError(f"Unknown savestate hash: {savestate_hash}")
     return SAVESTATE_HASHES[savestate_hash]
+
+def get_savestate_objective(savestate_file: Path) -> Callable:
+    """Get the savestate objectives from the file path"""
+    savestate_name = get_savestate_name(savestate_file)
+    if savestate_name not in M64_OBJECTIVES:
+        raise ValueError(f"No objective defined for savestate: {savestate_name}")
+    _, objective = M64_OBJECTIVES[savestate_name]
+    return objective
