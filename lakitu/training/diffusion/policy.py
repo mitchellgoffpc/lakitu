@@ -49,10 +49,37 @@ class PolicyFeature:
 class DiffusionConfig(BaseConfig):
     device: str = "cuda"
 
-    # Inputs / output structure
+    # Vision backbone
+    vision_backbone: str = "resnet18"
+    vision_backbone_weights: str | None = None
+    vision_features: int = 1024
+    crop_shape: tuple[int, int] | None = (240, 180)
+    crop_is_random: bool = True
+    use_group_norm: bool = True
+
+    # Unet
+    down_dims: tuple[int, ...] = (256, 512, 1024)
+    kernel_size: int = 5
+    n_groups: int = 8
+    diffusion_step_embed_dim: int = 128
+    use_film_scale_modulation: bool = True
+
+    # Noise scheduler
+    noise_scheduler_type: str = "DDPM"
+    num_train_timesteps: int = 100
+    beta_schedule: str = "squaredcos_cap_v2"
+    beta_start: float = 0.0001
+    beta_end: float = 0.02
+    prediction_type: str = "epsilon"
+    clip_sample: bool = True
+    clip_sample_range: float = 1.0
+    num_inference_steps: int | None = 10
+
+    # Input / output structure
     n_obs_steps: int = 2
     horizon: int = 16
     n_action_steps: int = 8
+    drop_n_last_frames: int = 7  # horizon - n_action_steps - n_obs_steps + 1
 
     input_features: dict[str, PolicyFeature] = field(default_factory=lambda: {
         "observation.image": PolicyFeature(
@@ -67,40 +94,6 @@ class DiffusionConfig(BaseConfig):
             type=FeatureType.ACTION, shape=(2,), dtype=DType.FLOAT, norm_mode=NormalizationMode.MIN_MAX, stats={"min": [-1.], "max": [1.]}
         ),
     })
-
-    # The original implementation doesn't sample frames for the last 7 steps,
-    # which avoids excessive padding and leads to improved training results.
-    drop_n_last_frames: int = 7  # horizon - n_action_steps - n_obs_steps + 1
-
-    # Architecture / modeling
-    # Vision backbone
-    vision_backbone: str = "resnet18"
-    vision_features: int = 1024
-    crop_shape: tuple[int, int] | None = (240, 180)
-    crop_is_random: bool = True
-    pretrained_backbone_weights: str | None = None
-    use_group_norm: bool = True
-    # Unet
-    down_dims: tuple[int, ...] = (256, 512, 1024)
-    kernel_size: int = 5
-    n_groups: int = 8
-    diffusion_step_embed_dim: int = 128
-    use_film_scale_modulation: bool = True
-    # Noise scheduler
-    noise_scheduler_type: str = "DDPM"
-    num_train_timesteps: int = 100
-    beta_schedule: str = "squaredcos_cap_v2"
-    beta_start: float = 0.0001
-    beta_end: float = 0.02
-    prediction_type: str = "epsilon"
-    clip_sample: bool = True
-    clip_sample_range: float = 1.0
-
-    # Inference
-    num_inference_steps: int | None = 10
-
-    # Loss computation
-    do_mask_loss_for_padding: bool = False
 
     @property
     def state_features(self) -> dict[str, PolicyFeature]:
@@ -129,7 +122,8 @@ class DiffusionConfig(BaseConfig):
 
 # Helper functions
 
-def _make_noise_scheduler(name: str, **kwargs: Any) -> Any:
+def make_noise_scheduler(name: str, **kwargs: Any) -> Any:
+    """Instantiate a noise scheduler"""
     if name == "DDPM":
         return DDPMScheduler(**kwargs)
     elif name == "DDIM":
@@ -137,12 +131,13 @@ def _make_noise_scheduler(name: str, **kwargs: Any) -> Any:
     else:
         raise ValueError(f"Unsupported noise scheduler type {name}")
 
-def _replace_batchnorm(module: nn.Module) -> nn.Module:
+def replace_batchnorm(module: nn.Module) -> nn.Module:
+    """Recursively replace BatchNorm2d with GroupNorm"""
     for name, child in module.named_children():
         if isinstance(child, nn.BatchNorm2d):
             setattr(module, name, nn.GroupNorm(num_groups=child.num_features // 16, num_channels=child.num_features))
         else:
-            _replace_batchnorm(child)
+            replace_batchnorm(child)
     return module
 
 
@@ -163,7 +158,7 @@ class DiffusionPolicy(nn.Module):
 
         self.unet = DiffusionConditionalUnet1d(config, global_cond_dim=global_cond_dim * config.n_obs_steps)
 
-        self.noise_scheduler = _make_noise_scheduler(
+        self.noise_scheduler = make_noise_scheduler(
             config.noise_scheduler_type,
             num_train_timesteps=config.num_train_timesteps,
             beta_start=config.beta_start,
@@ -269,16 +264,9 @@ class DiffusionPolicy(nn.Module):
         else:
             raise ValueError(f"Unsupported prediction type {self.config.prediction_type}")
 
-        loss = F.mse_loss(pred, target, reduction="none")
-
-        # Mask loss wherever the action is padded with copies (edges of the dataset trajectory)
-        if self.config.do_mask_loss_for_padding:
-            if "action_is_pad" not in batch:
-                raise ValueError(f"You need to provide 'action_is_pad' in the batch when {self.config.do_mask_loss_for_padding=}.")
-            in_episode_bound = ~batch["action_is_pad"]
-            loss = loss * in_episode_bound.unsqueeze(-1)
-
-        return loss.mean(), {"pred": pred}
+        assert pred.shape == target.shape, f"Predicted shape {pred.shape} does not match target shape {target.shape}"
+        loss = F.mse_loss(pred, target)
+        return loss, {"pred": pred}
 
     def _prepare_global_conditioning(self, batch: dict[str, Tensor]) -> Tensor:
         image_feature = next(iter(self.config.image_features.keys()))
@@ -321,12 +309,12 @@ class DiffusionRgbEncoder(nn.Module):
             self.do_crop = False
 
         # Set up backbone
-        backbone_model = getattr(torchvision.models, config.vision_backbone)(weights=config.pretrained_backbone_weights)
+        backbone_model = getattr(torchvision.models, config.vision_backbone)(weights=config.vision_backbone_weights)
         self.backbone: nn.Module = nn.Sequential(*(list(backbone_model.children())[:-2]))
         if config.use_group_norm:
-            if config.pretrained_backbone_weights:
+            if config.vision_backbone_weights:
                 raise ValueError("You can't replace BatchNorm in a pretrained model without ruining the weights!")
-            self.backbone = _replace_batchnorm(self.backbone)
+            self.backbone = replace_batchnorm(self.backbone)
 
         # Set up pooling and final layers
         images_shape = next(iter(config.image_features.values())).shape
