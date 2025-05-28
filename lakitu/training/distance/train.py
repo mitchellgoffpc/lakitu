@@ -19,7 +19,7 @@ from lakitu.training.helpers.config import BaseConfig
 from lakitu.training.helpers.metrics import AverageMeter, MetricsTracker, format_big_number
 from lakitu.training.helpers.wandb import WandBLogger, WandBConfig
 
-OUTPUT_DIR = Path(__file__).parents[1] / "experiments"
+OUTPUT_DIR = Path(__file__).parents[2] / "experiments"
 LRScheduler = Any
 
 @dataclass
