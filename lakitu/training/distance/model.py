@@ -70,15 +70,16 @@ def scalar_to_class_probs(x: Tensor, min: int, max: int) -> Tensor:
     num_classes = max_idx - min_idx + 1
 
     x = x.clamp(min=min, max=max)
-    left_idx = symlog(x).floor().long() - min_idx
-    right_idx = (left_idx + 1).clamp(max=num_classes-1)
+    left_idx = symlog(x).floor().long()
+    right_idx = (left_idx + 1).clamp(max=max_idx)
     left_val = symexp(left_idx)
     right_weight = (x - left_val) / (left_val + 1)  # linear interp from left_val to right_val
     left_weight = 1 - right_weight
 
     targets = torch.zeros((*x.shape[:-1], num_classes), device=x.device)
-    targets.scatter_(-1, right_idx, right_weight)  # scatter right weights first since right_idx might be clamped to left_idx
-    targets.scatter_(-1, left_idx, left_weight)
+    targets.scatter_(-1, right_idx - min_idx, right_weight)  # scatter right weights first since right_idx might be clamped to left_idx
+    targets.scatter_(-1, left_idx - min_idx, left_weight)
+    assert torch.all((targets >= 0) & (targets <= 1)), "Class probabilities must be in [0, 1]"
     return targets
 
 def class_probs_to_scalar(x: Tensor) -> Tensor:

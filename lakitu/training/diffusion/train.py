@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 import time
 from dataclasses import dataclass, field, asdict, replace
 from datetime import datetime
