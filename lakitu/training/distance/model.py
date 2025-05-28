@@ -16,8 +16,17 @@ from lakitu.training.diffusion.policy import PolicyFeature, FeatureType, Normali
 @dataclass
 class DistanceEstimatorConfig(BaseConfig):
     device: str = "cuda"
-    n_obs_steps: int = 1
 
+    # Vision backbone
+    vision_backbone: str = "resnet18"
+    vision_backbone_weights: str | None = None
+    vision_features: int = 1024
+    crop_shape: tuple[int, int] | None = (240, 180)
+    crop_is_random: bool = True
+    use_group_norm: bool = True
+
+    # Input / output structure
+    n_obs_steps: int = 1
     input_features: dict[str, PolicyFeature] = field(default_factory=lambda: {
         "observation.image": PolicyFeature(
             type=FeatureType.VISUAL, shape=(3, 240, 320), dtype=DType.FLOAT, norm_mode=NormalizationMode.IDENTITY
@@ -26,13 +35,6 @@ class DistanceEstimatorConfig(BaseConfig):
     output_features: dict[str, PolicyFeature] = field(default_factory=lambda: {
         "info.distance": PolicyFeature(type=FeatureType.STATE, shape=(7,), dtype=DType.FLOAT, norm_mode=NormalizationMode.IDENTITY),
     })
-
-    vision_backbone: str = "resnet18"
-    vision_features: int = 1024
-    crop_shape: tuple[int, int] | None = (240, 180)
-    crop_is_random: bool = True
-    pretrained_backbone_weights: str | None = None
-    use_group_norm: bool = True
 
     @property
     def state_features(self) -> dict[str, PolicyFeature]:
@@ -49,17 +51,53 @@ class DistanceEstimatorConfig(BaseConfig):
 
 # Helper functions
 
-def _get_distance_target(distance: Tensor) -> Tensor:
-    buckets = [2 ** i for i in range(5, 11)] + [float('inf')]
-    bucket = next(i for i, b in enumerate(buckets) if distance < b)
-    return torch.tensor(bucket, dtype=torch.long, device=distance.device)
+def symlog(x: Tensor) -> Tensor:
+    """Symmetric log function, as described in the DreamerV3 paper"""
+    return torch.sign(x) * torch.log2(torch.abs(x) + 1)
 
-def _replace_batchnorm(module: nn.Module) -> nn.Module:
+def symexp(x: Tensor) -> Tensor:
+    """Symmetric exponential function, as described in the DreamerV3 paper"""
+    return torch.sign(x) * (torch.exp2(torch.abs(x)) - 1)
+
+def scalar_to_class_probs(x: Tensor, min: int, max: int) -> Tensor:
+    """Two-hot encoding scheme, as described in the DreamerV3 paper"""
+    assert min < max, "min must be less than max"
+    if x.ndim < 1:
+        x = x.unsqueeze(0)
+
+    min_idx = int(symlog(torch.tensor(min)).floor().long().item())
+    max_idx = int(symlog(torch.tensor(max)).ceil().long().item())
+    num_classes = max_idx - min_idx + 1
+
+    x = x.clamp(min=min, max=max)
+    left_idx = symlog(x).floor().long()
+    right_idx = (left_idx + 1).clamp(max=num_classes-1)
+    left_val = symexp(left_idx)
+    right_weight = (x - left_val) / (left_val + 1)  # linear interp from left_val to right_val
+    left_weight = 1 - right_weight
+
+    targets = torch.zeros((*x.shape[:-1], num_classes), device=x.device)
+    targets.scatter_(-1, right_idx, right_weight)  # scatter right weights first since right_idx might be clamped to left_idx
+    targets.scatter_(-1, left_idx, left_weight)
+    return targets
+
+def class_probs_to_scalar(x: Tensor) -> Tensor:
+    """Decode class probabilities into a scalar value"""
+    num_classes = x.shape[-1]
+    points = symexp(torch.arange(num_classes, device=x.device).float()).broadcast_to(x.shape)
+    return (x * points).sum(dim=-1)
+
+def get_distance_targets(distance: Tensor) -> Tensor:
+    distance = torch.where(distance >= 0, distance, torch.tensor(2048, device=distance.device))
+    return scalar_to_class_probs(distance, min=0, max=2048)
+
+def replace_batchnorm(module: nn.Module) -> nn.Module:
+    """Recursively replace BatchNorm2d with GroupNorm"""
     for name, child in module.named_children():
         if isinstance(child, nn.BatchNorm2d):
             setattr(module, name, nn.GroupNorm(num_groups=child.num_features // 16, num_channels=child.num_features))
         else:
-            _replace_batchnorm(child)
+            replace_batchnorm(child)
     return module
 
 
@@ -82,12 +120,12 @@ class DistanceEstimator(nn.Module):
         global_cond_dim *= config.n_obs_steps
 
         # Set up backbone
-        backbone_model = getattr(torchvision.models, config.vision_backbone)(weights=config.pretrained_backbone_weights)
+        backbone_model = getattr(torchvision.models, config.vision_backbone)(weights=config.vision_backbone_weights)
         self.backbone: nn.Module = nn.Sequential(*(list(backbone_model.children())[:-2]))
         if config.use_group_norm:
-            if config.pretrained_backbone_weights:
+            if config.vision_backbone_weights:
                 raise ValueError("You can't replace BatchNorm in a pretrained model without ruining the weights!")
-            self.backbone = _replace_batchnorm(self.backbone)
+            self.backbone = replace_batchnorm(self.backbone)
 
         # Set up pooling and final layers
         images_shape = next(iter(config.image_features.values())).shape
@@ -106,7 +144,7 @@ class DistanceEstimator(nn.Module):
 
     def compute_loss(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict[str, Tensor]]:
         pred = self(batch)
-        targets = torch.stack([_get_distance_target(d) for d in batch["info.distance"]], dim=0)
+        targets = get_distance_targets(batch['info.distance'])
         assert pred.shape == (*targets.shape, self.config.output_size)
         loss = F.cross_entropy(pred, targets)
         return loss, {'pred': pred}
