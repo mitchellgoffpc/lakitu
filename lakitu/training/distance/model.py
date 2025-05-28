@@ -1,4 +1,5 @@
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Self
@@ -27,6 +28,7 @@ class DistanceEstimatorConfig(BaseConfig):
 
     # Input / output structure
     n_obs_steps: int = 1
+    min_distance: int = 31
     input_features: dict[str, PolicyFeature] = field(default_factory=lambda: {
         "observation.image": PolicyFeature(
             type=FeatureType.VISUAL, shape=(3, 240, 320), dtype=DType.FLOAT, norm_mode=NormalizationMode.IDENTITY
@@ -82,10 +84,11 @@ def scalar_to_class_probs(x: Tensor, min: int, max: int) -> Tensor:
     assert torch.all((targets >= 0) & (targets <= 1)), "Class probabilities must be in [0, 1]"
     return targets
 
-def class_probs_to_scalar(x: Tensor) -> Tensor:
+def class_probs_to_scalar(x: Tensor, min_distance: int) -> Tensor:
     """Decode class probabilities into a scalar value"""
     num_classes = x.shape[-1]
-    points = symexp(torch.arange(num_classes, device=x.device).float()).broadcast_to(x.shape)
+    min_idx = int(math.log2(min_distance + 1))
+    points = symexp(torch.arange(min_idx, min_idx + num_classes, device=x.device).float()).broadcast_to(x.shape)
     return (x * points).sum(dim=-1)
 
 def get_distance_targets(distance: Tensor, min: int, max: int) -> Tensor:
@@ -145,7 +148,9 @@ class DistanceEstimator(nn.Module):
 
     def compute_loss(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict[str, Tensor]]:
         pred = self(batch)
-        targets = get_distance_targets(batch['info.distance'], min=2 ** 5 - 1, max=2 ** 11 - 1)
+        min_distance = self.config.min_distance
+        max_distance = 2 ** (int(math.log2(min_distance + 1)) + self.config.output_size - 1) - 1
+        targets = get_distance_targets(batch['info.distance'], min=min_distance, max=max_distance)
         assert pred.shape == targets.shape, f"Prediction shape {pred.shape} does not match target shape {targets.shape}"
         loss = F.cross_entropy(pred, targets)
         return loss, {'pred': pred}
@@ -185,7 +190,7 @@ class DistanceEstimator(nn.Module):
     def from_pretrained(cls, checkpoint_dir: Path, **kwargs: Any) -> Self:
         from safetensors.torch import safe_open
         with open(checkpoint_dir / 'train_config.json') as f:
-            config = DistanceEstimatorConfig.create(json.load(f)['policy'], kwargs)
+            config = DistanceEstimatorConfig.create(json.load(f)['model'], kwargs)
         model: Self = cls(config).to(config.device)
         with safe_open(checkpoint_dir / 'model.safetensors', framework="pt", device=config.device) as f:
             state_dict = {key: f.get_tensor(key) for key in f.keys()}

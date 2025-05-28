@@ -268,6 +268,7 @@ if __name__ == "__main__":
     from lakitu.env.games import M64_INFO_HOOKS, M64_INFO_FIELDS
     from lakitu.env.run import GamepadController, KeyboardController, combine_controller_states
     from lakitu.training.diffusion.policy import DiffusionPolicy
+    from lakitu.training.distance.model import DistanceEstimator, class_probs_to_scalar
 
     class PygameKeyboardController(KeyboardController):
         JOYSTICK = {
@@ -295,7 +296,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run N64 Gym Environment')
     parser.add_argument('rom_path', type=str, help='Path to the ROM file')
     parser.add_argument('-s', '--savestate', type=str, default=None, help='Path to savestate file')
-    parser.add_argument('-p', '--policy', type=str, default=None, help='Path to policy file')
+    parser.add_argument('-p', '--policy', type=str, default=None, help='Path to policy checkpoint')
+    parser.add_argument('-d', '--distance', type=str, default=None, help='Path to distance estimator checkpoint')
     parser.add_argument('-r', '--replay', type=str, default=None, help="Path of episode to replay")
     parser.add_argument('-o', '--output', type=str, default=None, help='Path to output directory')
     args = parser.parse_args()
@@ -333,8 +335,12 @@ if __name__ == "__main__":
     env = N64Env(Path(args.rom_path), savestate_path, render_mode="rgb_array", info_hooks=M64_INFO_HOOKS)
     observation, info = env.reset()
 
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    if args.distance:
+        distance_estimator = DistanceEstimator.from_pretrained(Path(args.distance), device=device).eval()
+
     if args.policy:
-        policy = DiffusionPolicy.from_pretrained(Path(args.policy), device='cuda' if torch.cuda.is_available() else 'cpu').eval()
+        policy = DiffusionPolicy.from_pretrained(Path(args.policy), device=device).eval()
         policy.reset()
         control_mode = ControlMode.MODEL
     elif args.replay:
@@ -362,6 +368,15 @@ if __name__ == "__main__":
                     if args.policy:
                         policy.reset()
 
+        # Estimate distance
+        if args.distance:
+            observation_resized = cv2.resize(observation, (W, H))
+            observation_tensor = torch.as_tensor(observation_resized[None, None]).to(device)
+            observation_tensor = einops.rearrange(observation_tensor, "b s h w c -> b s c h w").contiguous().float() / 255.0
+            distance_tensor = torch.softmax(distance_estimator({'observation.image': observation_tensor}), dim=-1)
+            distance = class_probs_to_scalar(distance_tensor, min_distance=distance_estimator.config.min_distance).item()
+
+        # Get action based on control mode
         gamepad_state = gamepad.get_controller_state()
         keyboard_state = keyboard.get_controller_state()
         controller_state = combine_controller_states(gamepad_state, keyboard_state)
@@ -370,7 +385,6 @@ if __name__ == "__main__":
         if control_mode is ControlMode.REPLAY and frame_idx >= len(episode_data['action.joystick']):
             control_mode = ControlMode.HUMAN
 
-        # Get action based on control mode
         if control_mode is ControlMode.MODEL:
             observation_resized = cv2.resize(observation, (W, H))
             observation_tensor = torch.as_tensor(observation_resized[None]).to(policy.config.device)
