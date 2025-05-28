@@ -43,21 +43,22 @@ class LRSchedulerConfig:
 
 @dataclass
 class TrainConfig(BaseConfig):
+    # Training
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
     model: DistanceEstimatorConfig = field(default_factory=DistanceEstimatorConfig)
-    # Set `dir` to where you would like to save all of the run outputs. If you run another training session
-    # with the same value for `dir` its contents will be overwritten unless you set `resume` to true.
-    output_dir: Path = field(default_factory=lambda: OUTPUT_DIR / datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
-    resume: bool = False
-    seed: int | None = 1000
+    optimizer: AdamConfig = field(default_factory=AdamConfig)
+    scheduler: LRSchedulerConfig = field(default_factory=LRSchedulerConfig)
     num_workers: int = 4
     batch_size: int = 64
     steps: int = 100_000
+    seed: int | None = 1000
+
+    # Logging
+    output_dir: Path = field(default_factory=lambda: OUTPUT_DIR / datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+    resume: bool = False
     log_freq: int = 200
-    save_checkpoint: bool = True
     save_freq: int = 25_000
-    optimizer: AdamConfig = field(default_factory=AdamConfig)
-    scheduler: LRSchedulerConfig = field(default_factory=LRSchedulerConfig)
+    save_checkpoint: bool = True
     wandb: WandBConfig = field(default_factory=WandBConfig)
 
 

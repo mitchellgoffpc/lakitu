@@ -70,7 +70,7 @@ def scalar_to_class_probs(x: Tensor, min: int, max: int) -> Tensor:
     num_classes = max_idx - min_idx + 1
 
     x = x.clamp(min=min, max=max)
-    left_idx = symlog(x).floor().long()
+    left_idx = symlog(x).floor().long() - min_idx
     right_idx = (left_idx + 1).clamp(max=num_classes-1)
     left_val = symexp(left_idx)
     right_weight = (x - left_val) / (left_val + 1)  # linear interp from left_val to right_val
@@ -87,9 +87,9 @@ def class_probs_to_scalar(x: Tensor) -> Tensor:
     points = symexp(torch.arange(num_classes, device=x.device).float()).broadcast_to(x.shape)
     return (x * points).sum(dim=-1)
 
-def get_distance_targets(distance: Tensor) -> Tensor:
-    distance = torch.where(distance >= 0, distance, torch.tensor(2048, device=distance.device))
-    return scalar_to_class_probs(distance, min=0, max=2048)
+def get_distance_targets(distance: Tensor, min: int, max: int) -> Tensor:
+    distance = torch.where(distance >= 0, distance, torch.tensor(max, device=distance.device))
+    return scalar_to_class_probs(distance, min=min, max=max)
 
 def replace_batchnorm(module: nn.Module) -> nn.Module:
     """Recursively replace BatchNorm2d with GroupNorm"""
@@ -144,8 +144,8 @@ class DistanceEstimator(nn.Module):
 
     def compute_loss(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict[str, Tensor]]:
         pred = self(batch)
-        targets = get_distance_targets(batch['info.distance'])
-        assert pred.shape == (*targets.shape, self.config.output_size)
+        targets = get_distance_targets(batch['info.distance'], min=2 ** 5 - 1, max=2 ** 11 - 1)
+        assert pred.shape == targets.shape, f"Prediction shape {pred.shape} does not match target shape {targets.shape}"
         loss = F.cross_entropy(pred, targets)
         return loss, {'pred': pred}
 
